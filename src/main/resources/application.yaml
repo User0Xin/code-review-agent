@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: demo01
+  mvc:
+    async:
+      request-timeout: 120s
+  ai:
+    # 上游返回 502 时不要连着重试，否则接口会卡住几十秒。
+    retry:
+      max-attempts: 1
+    openai:
+      # 也可用环境变量覆盖：OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL
+      api-key: ${OPENAI_API_KEY:pwd}
+      # Spring AI 会在这个地址后拼接 /v1/chat/completions。
+      # 服务若提供 http://localhost:8080/v1/chat/completions，这里填到端口即可，不要再写 /v1。
+      base-url: ${OPENAI_BASE_URL:http://localhost:8080}
+      chat:
+        options:
+          # 必须是该服务 /v1/models 里真实存在的模型名。
+          # 不要设置 temperature：当前 Codex 网关会把 temperature 当成非法提示词拒绝。
+          model: ${OPENAI_MODEL:gpt-5.6-sol}
+
+# 当前 gpt-6.1-sol 的 tool_mode 是 code_mode_only，不接受 OpenAI function tools。
+# 换成支持函数调用的模型（如百炼 qwen-plus）后，把这里改成 true。
+demo:
+  tools-enabled: false
+
+server:
+  port: 8088
