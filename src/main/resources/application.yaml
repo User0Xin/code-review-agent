@@ -25,5 +25,10 @@ spring:
 demo:
   tools-enabled: false
 
+review:
+  diff-wait:
+    max-attempts: 3
+    interval: 2s
+
 server:
   port: 8088
