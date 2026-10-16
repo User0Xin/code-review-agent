@@ -3,7 +3,6 @@ package com.agent.codereviewagent.controller;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.service.GitlabClient;
-import com.agent.codereviewagent.mapper.impl.InMemoryReviewRecordStoreImpl;
 import com.agent.codereviewagent.mapper.ReviewRecordStore;
 import com.agent.codereviewagent.service.Reviewer;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,6 +17,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -48,7 +48,10 @@ class MergeRequestWebhookTest {
     private MockMvc mockMvc;
 
     @Autowired
-    private InMemoryReviewRecordStoreImpl records;
+    private ReviewRecordStore records;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Autowired
     private ObjectMapper json;
@@ -57,7 +60,8 @@ class MergeRequestWebhookTest {
     void reset() {
         GITLAB.reset();
         REVIEWER.calls = 0;
-        records.clear();
+        jdbcTemplate.update("DELETE FROM review_failure_note");
+        jdbcTemplate.update("DELETE FROM review_record");
     }
 
     @Test
