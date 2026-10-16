@@ -1,6 +1,6 @@
 spring:
   application:
-    name: demo01
+    name: code-review-agent
   datasource:
     # SQLite 是进程内数据库。可用 REVIEW_DATABASE_PATH 指定持久化文件的绝对路径。
     url: jdbc:sqlite:${REVIEW_DATABASE_PATH:./review-records.db}
