@@ -10,7 +10,20 @@ public interface Reviewer {
     record ReviewRequest(long projectId, long mergeRequestIid, String headSha) {
     }
 
-    record ReviewFindings(List<String> comments) {
+    /**
+     * 准备写回的一条评论。能定位到行时填 newLine 或 oldLine，否则两者都为空，写到概览讨论。
+     * 写回成功之后才是发现。
+     */
+    record CommentDraft(
+            String path,
+            Integer newLine,
+            Integer oldLine,
+            String category,
+            String citation,
+            String commentBody) {
+    }
+
+    record ReviewFindings(List<CommentDraft> drafts) {
 
         public static ReviewFindings none() {
             return new ReviewFindings(List.of());

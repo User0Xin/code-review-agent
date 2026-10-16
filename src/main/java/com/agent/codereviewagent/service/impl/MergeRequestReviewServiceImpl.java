@@ -5,6 +5,7 @@ import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.config.DiffWaitProperties;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
+import com.agent.codereviewagent.mapper.FindingStore;
 import com.agent.codereviewagent.mapper.ReviewRecordStore;
 import com.agent.codereviewagent.service.Reviewer;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -24,6 +25,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private final GitlabClient gitlabClient;
     private final Reviewer reviewer;
     private final ReviewRecordStore records;
+    private final FindingStore findingsStore;
     private final ReviewClock clock;
     private final Sleeper sleeper;
     private final DiffWaitProperties diffWait;
@@ -31,12 +33,14 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     public MergeRequestReviewServiceImpl(GitlabClient gitlabClient,
                                          Reviewer reviewer,
                                          ReviewRecordStore records,
+                                         FindingStore findingsStore,
                                          ReviewClock clock,
                                          Sleeper sleeper,
                                          DiffWaitProperties diffWait) {
         this.gitlabClient = gitlabClient;
         this.reviewer = reviewer;
         this.records = records;
+        this.findingsStore = findingsStore;
         this.clock = clock;
         this.sleeper = sleeper;
         this.diffWait = diffWait;
@@ -63,18 +67,71 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             fail(projectId, mergeRequestIid, DIFF_NOT_READY);
             return;
         }
-        reviewer.review(new Reviewer.ReviewRequest(projectId, mergeRequestIid, diffRefs.headSha()));
+        Reviewer.ReviewFindings findings = reviewer.review(
+                new Reviewer.ReviewRequest(projectId, mergeRequestIid, diffRefs.headSha()));
+        int failed = postDrafts(projectId, mergeRequestIid, diffRefs.headSha(), findings.drafts());
+        if (failed > 0) {
+            fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回");
+            return;
+        }
         records.save(new ReviewRecordStore.ReviewRecord(
                 projectId,
                 mergeRequestIid,
                 ReviewRecordStore.ReviewRecord.Outcome.SUCCESS,
                 null,
                 clock.now()));
-        // 这次没有发现。若之前留过失败讨论，删掉它，避免成功后还挂着失败。
+        // 已写回的发现都留下。若之前留过失败讨论，删掉它。
         records.failureNoteId(projectId, mergeRequestIid).ifPresent(noteId -> {
             gitlabClient.deleteNote(projectId, mergeRequestIid, noteId);
             records.forgetFailureNote(projectId, mergeRequestIid);
         });
+    }
+
+    /** 每条评论只写回一次。没写上的不记为发现，已经写上并保存的不撤回。 */
+    private int postDrafts(long projectId, long mergeRequestIid, String headSha, java.util.List<Reviewer.CommentDraft> drafts) {
+        int failed = 0;
+        for (Reviewer.CommentDraft draft : drafts) {
+            long discussionId;
+            try {
+                discussionId = postOne(projectId, mergeRequestIid, headSha, draft);
+            }
+            catch (RuntimeException exception) {
+                failed++;
+                continue;
+            }
+            try {
+                findingsStore.save(new FindingStore.Finding(
+                        projectId,
+                        mergeRequestIid,
+                        discussionId,
+                        draft.path(),
+                        draft.newLine(),
+                        draft.oldLine(),
+                        draft.category(),
+                        draft.citation(),
+                        draft.commentBody(),
+                        headSha));
+            }
+            catch (RuntimeException exception) {
+                gitlabClient.deleteNote(projectId, mergeRequestIid, discussionId);
+                failed++;
+            }
+        }
+        return failed;
+    }
+
+    private long postOne(long projectId, long mergeRequestIid, String headSha, Reviewer.CommentDraft draft) {
+        if (draft.newLine() != null || draft.oldLine() != null) {
+            return gitlabClient.createLineDiscussion(
+                    projectId,
+                    mergeRequestIid,
+                    draft.path(),
+                    draft.newLine(),
+                    draft.oldLine(),
+                    headSha,
+                    draft.commentBody());
+        }
+        return gitlabClient.createOverviewDiscussion(projectId, mergeRequestIid, draft.commentBody());
     }
 
     /** 立刻读一次 diff。没就绪再按间隔重试，总次数至少为 1。始终没有则返回 null。 */

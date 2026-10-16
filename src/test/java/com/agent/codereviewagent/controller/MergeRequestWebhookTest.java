@@ -3,6 +3,7 @@ package com.agent.codereviewagent.controller;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.service.GitlabClient;
+import com.agent.codereviewagent.mapper.FindingStore;
 import com.agent.codereviewagent.mapper.ReviewRecordStore;
 import com.agent.codereviewagent.service.Reviewer;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,6 +52,9 @@ class MergeRequestWebhookTest {
     private ReviewRecordStore records;
 
     @Autowired
+    private FindingStore findings;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
@@ -60,8 +64,10 @@ class MergeRequestWebhookTest {
     void reset() {
         GITLAB.reset();
         REVIEWER.calls = 0;
+        REVIEWER.findings = Reviewer.ReviewFindings.none();
         jdbcTemplate.update("DELETE FROM review_failure_note");
         jdbcTemplate.update("DELETE FROM review_record");
+        jdbcTemplate.update("DELETE FROM finding");
     }
 
     @Test
@@ -136,6 +142,54 @@ class MergeRequestWebhookTest {
                         ReviewRecordStore.ReviewRecord.Outcome.SUCCESS);
     }
 
+    @Test
+    void findingsArePostedOnceAndStored() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = new Reviewer.ReviewFindings(List.of(
+                new Reviewer.CommentDraft("main.go", 12, null, "编码规范", "命名", "这里的命名看不出用途。"),
+                new Reviewer.CommentDraft("README.md", null, null, "缺陷", null, "响应体没有关闭。")));
+
+        postWebhook(openPayload());
+
+        assertThat(GITLAB.notes).hasSize(2);
+        assertThat(GITLAB.notes.get(0).kind).isEqualTo("line");
+        assertThat(GITLAB.notes.get(0).body).isEqualTo("这里的命名看不出用途。");
+        assertThat(GITLAB.notes.get(0).path).isEqualTo("main.go");
+        assertThat(GITLAB.notes.get(0).newLine).isEqualTo(12);
+        assertThat(GITLAB.notes.get(1).kind).isEqualTo("overview");
+        assertThat(GITLAB.notes.get(1).body).isEqualTo("响应体没有关闭。");
+        assertThat(findings.findByMergeRequest(9, 3)).satisfies(saved -> {
+            assertThat(saved).hasSize(2);
+            assertThat(saved.get(0).discussionId()).isEqualTo(GITLAB.notes.get(0).id);
+            assertThat(saved.get(0).category()).isEqualTo("编码规范");
+            assertThat(saved.get(0).citation()).isEqualTo("命名");
+            assertThat(saved.get(0).commentBody()).isEqualTo("这里的命名看不出用途。");
+            assertThat(saved.get(0).headSha()).isEqualTo("abc123");
+            assertThat(saved.get(1).newLine()).isNull();
+            assertThat(saved.get(1).category()).isEqualTo("缺陷");
+        });
+    }
+
+    @Test
+    void aFailedWriteKeepsTheFindingsAlreadyPosted() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.throwOnCreateNumber = 2;
+        REVIEWER.findings = new Reviewer.ReviewFindings(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。"),
+                new Reviewer.CommentDraft("main.go", 9, null, "缺陷", null, "锁没有释放。")));
+
+        postWebhook(openPayload());
+
+        assertThat(findings.findByMergeRequest(9, 3)).singleElement()
+                .extracting(FindingStore.Finding::commentBody)
+                .isEqualTo("错误没有检查。");
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body)
+                .containsExactly("错误没有检查。", "审查失败：有 1 条没能写回。2026-10-15T09:00:00Z");
+        assertThat(records.findByMergeRequest(9, 3))
+                .extracting(ReviewRecordStore.ReviewRecord::outcome)
+                .containsExactly(ReviewRecordStore.ReviewRecord.Outcome.FAILED);
+    }
+
     private void postWebhook(ObjectNode body) throws Exception {
         mockMvc.perform(post("/gitlab/webhooks/merge-requests")
                         .header("X-Gitlab-Event", "Merge Request Hook")
@@ -202,6 +256,8 @@ class MergeRequestWebhookTest {
         private final List<Long> deletedNoteIds = new ArrayList<>();
         private Optional<DiffRefs> diff = Optional.empty();
         private int diffReads;
+        private int creates;
+        private int throwOnCreateNumber;
 
         void readyWith(String headSha) {
             diff = Optional.of(new DiffRefs(headSha));
@@ -212,6 +268,8 @@ class MergeRequestWebhookTest {
             deletedNoteIds.clear();
             diff = Optional.empty();
             diffReads = 0;
+            creates = 0;
+            throwOnCreateNumber = 0;
             noteIds.set(0);
         }
 
@@ -223,9 +281,25 @@ class MergeRequestWebhookTest {
 
         @Override
         public long createOverviewDiscussion(long projectId, long mergeRequestIid, String body) {
+            failIfRequested();
             long id = noteIds.incrementAndGet();
-            notes.add(new Note(id, body));
+            notes.add(new Note(id, "overview", null, null, null, body));
             return id;
+        }
+
+        @Override
+        public long createLineDiscussion(long projectId, long mergeRequestIid, String path, Integer newLine, Integer oldLine, String headSha, String body) {
+            failIfRequested();
+            long id = noteIds.incrementAndGet();
+            notes.add(new Note(id, "line", path, newLine, oldLine, body));
+            return id;
+        }
+
+        private void failIfRequested() {
+            creates++;
+            if (throwOnCreateNumber == creates) {
+                throw new IllegalStateException("写回失败");
+            }
         }
 
         @Override
@@ -234,18 +308,19 @@ class MergeRequestWebhookTest {
             notes.removeIf(note -> note.id == noteId);
         }
 
-        record Note(long id, String body) {
+        record Note(long id, String kind, String path, Integer newLine, Integer oldLine, String body) {
         }
     }
 
     static final class RecordingReviewerImpl implements Reviewer {
 
         private int calls;
+        private ReviewFindings findings = ReviewFindings.none();
 
         @Override
         public ReviewFindings review(ReviewRequest request) {
             calls++;
-            return ReviewFindings.none();
+            return findings;
         }
     }
 }

@@ -21,6 +21,11 @@ public class UnavailableGitlabClientImpl implements GitlabClient {
     }
 
     @Override
+    public long createLineDiscussion(long projectId, long mergeRequestIid, String path, Integer newLine, Integer oldLine, String headSha, String body) {
+        throw new IllegalStateException("GitLab 客户端尚未配置");
+    }
+
+    @Override
     public void deleteNote(long projectId, long mergeRequestIid, long noteId) {
         throw new IllegalStateException("GitLab 客户端尚未配置");
     }
