@@ -31,6 +31,8 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -197,7 +199,9 @@ class MergeRequestWebhookTest {
                         .header("X-Gitlab-Event", "Merge Request Hook")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json.writeValueAsBytes(body)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value(200));
     }
 
     private ObjectNode openPayload() {

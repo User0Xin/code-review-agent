@@ -1,6 +1,7 @@
 package com.agent.codereviewagent.service.impl;
 
 import com.agent.codereviewagent.config.DiffWaitProperties;
+import com.agent.codereviewagent.models.dto.MergeRequestWebhookRequest;
 import com.agent.codereviewagent.models.entity.FindingEntity;
 import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
 import com.agent.codereviewagent.service.FindingService;
@@ -10,7 +11,6 @@ import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
-import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -49,17 +49,20 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     }
 
     @Override
-    public void accept(String gitlabEvent, JsonNode body) {
+    public void accept(String gitlabEvent, MergeRequestWebhookRequest request) {
         // 只处理 GitLab 的合并请求事件。别的 hook、空 body 直接忽略，也不留审查记录。
-        if (!"Merge Request Hook".equals(gitlabEvent) || body == null || !body.path("object_kind").asText().equals("merge_request")) {
+        if (!"Merge Request Hook".equals(gitlabEvent)
+                || request == null
+                || !"merge_request".equals(request.objectKind())) {
             return;
         }
-        JsonNode attributes = body.path("object_attributes");
-        if (!startsReview(attributes)) {
+        MergeRequestWebhookRequest.ObjectAttributes attributes = request.objectAttributes();
+        if (attributes == null || !startsReview(attributes)) {
             return;
         }
-        long projectId = body.path("project").path("id").asLong();
-        long mergeRequestIid = attributes.path("iid").asLong();
+        MergeRequestWebhookRequest.Project project = request.project();
+        long projectId = project == null || project.id() == null ? 0 : project.id();
+        long mergeRequestIid = attributes.iid() == null ? 0 : attributes.iid();
         // 缺少项目或合并请求编号时无法写回，也不记审查记录。
         if (projectId == 0 || mergeRequestIid == 0) {
             return;
@@ -205,15 +208,15 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
      * 打开合并请求，或更新里带了 oldrev（源分支有新提交）时才审查。
      * 改标题、指派人这类不带新代码的更新不审查。
      */
-    private static boolean startsReview(JsonNode attributes) {
-        String action = attributes.path("action").asText();
+    private static boolean startsReview(MergeRequestWebhookRequest.ObjectAttributes attributes) {
+        String action = attributes.action();
         if ("open".equals(action)) {
             return true;
         }
         if (!"update".equals(action)) {
             return false;
         }
-        JsonNode oldrev = attributes.get("oldrev");
-        return oldrev != null && !oldrev.asText().isBlank();
+        String oldrev = attributes.oldrev();
+        return oldrev != null && !oldrev.isBlank();
     }
 }
