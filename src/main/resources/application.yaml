@@ -25,6 +25,7 @@ spring:
 demo:
   tools-enabled: false
 
+# diff 未就绪时的重试。超过 max-attempts 后留下一条失败概览讨论。
 review:
   diff-wait:
     max-attempts: 3

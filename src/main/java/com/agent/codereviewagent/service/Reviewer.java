@@ -2,6 +2,7 @@ package com.agent.codereviewagent.service;
 
 import java.util.List;
 
+/** 对一次已经就绪的 diff 做审查。 */
 public interface Reviewer {
 
     ReviewFindings review(ReviewRequest request);

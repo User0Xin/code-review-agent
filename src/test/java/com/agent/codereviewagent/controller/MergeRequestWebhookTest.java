@@ -1,7 +1,7 @@
 package com.agent.codereviewagent.controller;
 
-import com.agent.codereviewagent.common.utils.ReviewClock;
-import com.agent.codereviewagent.common.utils.Sleeper;
+import com.agent.codereviewagent.utils.ReviewClock;
+import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.ReviewRecordStore;
 import com.agent.codereviewagent.service.Reviewer;

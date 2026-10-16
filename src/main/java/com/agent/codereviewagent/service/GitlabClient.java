@@ -2,6 +2,7 @@ package com.agent.codereviewagent.service;
 
 import java.util.Optional;
 
+/** 读取合并请求的 diff，以及写回、删除概览讨论。 */
 public interface GitlabClient {
 
     Optional<DiffRefs> diffRefs(long projectId, long mergeRequestIid);

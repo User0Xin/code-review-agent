@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 
+/** review.diff-wait。默认最多读 3 次 diff，两次之间隔 2 秒。 */
 @ConfigurationProperties(prefix = "review.diff-wait")
 public class DiffWaitProperties {
 
