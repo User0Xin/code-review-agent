@@ -1,4 +1,4 @@
-package com.agent.codereviewagent.service;
+package com.agent.codereviewagent.mapper;
 
 import java.time.Instant;
 import java.util.List;

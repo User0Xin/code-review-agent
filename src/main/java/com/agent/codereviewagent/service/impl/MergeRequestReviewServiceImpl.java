@@ -5,7 +5,7 @@ import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.config.DiffWaitProperties;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
-import com.agent.codereviewagent.service.ReviewRecordStore;
+import com.agent.codereviewagent.mapper.ReviewRecordStore;
 import com.agent.codereviewagent.service.Reviewer;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;

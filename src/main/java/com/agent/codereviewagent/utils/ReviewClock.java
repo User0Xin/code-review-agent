@@ -10,7 +10,7 @@ public interface ReviewClock {
     Instant now();
 
     @Component
-    class SystemReviewClock implements ReviewClock {
+    class SystemReviewClockImpl implements ReviewClock {
 
         @Override
         public Instant now() {

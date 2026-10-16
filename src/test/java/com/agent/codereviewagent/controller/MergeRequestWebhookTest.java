@@ -3,9 +3,9 @@ package com.agent.codereviewagent.controller;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.service.GitlabClient;
-import com.agent.codereviewagent.service.ReviewRecordStore;
+import com.agent.codereviewagent.mapper.impl.InMemoryReviewRecordStoreImpl;
+import com.agent.codereviewagent.mapper.ReviewRecordStore;
 import com.agent.codereviewagent.service.Reviewer;
-import com.agent.codereviewagent.service.impl.InMemoryReviewRecordStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,14 +41,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class MergeRequestWebhookTest {
 
     private static final Instant NOW = Instant.parse("2026-10-15T09:00:00Z");
-    private static final FakeGitlab GITLAB = new FakeGitlab();
-    private static final RecordingReviewer REVIEWER = new RecordingReviewer();
+    private static final FakeGitlabImpl GITLAB = new FakeGitlabImpl();
+    private static final RecordingReviewerImpl REVIEWER = new RecordingReviewerImpl();
 
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
-    private InMemoryReviewRecordStore records;
+    private InMemoryReviewRecordStoreImpl records;
 
     @Autowired
     private ObjectMapper json;
@@ -191,7 +191,7 @@ class MergeRequestWebhookTest {
         }
     }
 
-    static final class FakeGitlab implements GitlabClient {
+    static final class FakeGitlabImpl implements GitlabClient {
 
         private final AtomicLong noteIds = new AtomicLong();
         private final List<Note> notes = new ArrayList<>();
@@ -234,7 +234,7 @@ class MergeRequestWebhookTest {
         }
     }
 
-    static final class RecordingReviewer implements Reviewer {
+    static final class RecordingReviewerImpl implements Reviewer {
 
         private int calls;
 

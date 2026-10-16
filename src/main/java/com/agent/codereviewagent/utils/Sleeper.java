@@ -10,7 +10,7 @@ public interface Sleeper {
     void sleep(Duration duration);
 
     @Component
-    class ThreadSleeper implements Sleeper {
+    class ThreadSleeperImpl implements Sleeper {
 
         @Override
         public void sleep(Duration duration) {

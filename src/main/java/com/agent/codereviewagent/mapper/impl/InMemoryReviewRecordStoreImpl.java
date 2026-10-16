@@ -1,8 +1,8 @@
-package com.agent.codereviewagent.service.impl;
+package com.agent.codereviewagent.mapper.impl;
 
-import com.agent.codereviewagent.service.ReviewRecordStore;
-
+import com.agent.codereviewagent.mapper.ReviewRecordStore;
 import org.springframework.stereotype.Component;
+
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 审查历史按发生顺序追加；失败概览讨论只记住当前那一条的 note id，用来替换或删除。
  */
 @Component
-public class InMemoryReviewRecordStore implements ReviewRecordStore {
+public class InMemoryReviewRecordStoreImpl implements ReviewRecordStore {
 
     /** 同一合并请求可以有多条。ArrayList 不是线程安全的，读写都加锁。 */
     private final List<ReviewRecord> records = new ArrayList<>();
