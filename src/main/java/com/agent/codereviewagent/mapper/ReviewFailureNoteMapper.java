@@ -1,4 +1,4 @@
-package com.agent.codereviewagent.mapper.sqlite;
+package com.agent.codereviewagent.mapper;
 
 import com.agent.codereviewagent.models.entity.ReviewFailureNoteEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
@@ -6,7 +6,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
-/** 失败概览讨论索引的 MyBatis-Plus Mapper。 */
+/** 失败概览讨论索引的数据访问 Mapper。 */
 @Mapper
 public interface ReviewFailureNoteMapper extends BaseMapper<ReviewFailureNoteEntity> {
 

@@ -2,9 +2,11 @@ package com.agent.codereviewagent.controller;
 
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
+import com.agent.codereviewagent.models.entity.FindingEntity;
+import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
+import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
-import com.agent.codereviewagent.mapper.FindingStore;
-import com.agent.codereviewagent.mapper.ReviewRecordStore;
+import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -49,10 +51,10 @@ class MergeRequestWebhookTest {
     private MockMvc mockMvc;
 
     @Autowired
-    private ReviewRecordStore records;
+    private ReviewRecordService records;
 
     @Autowired
-    private FindingStore findings;
+    private FindingService findings;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -78,8 +80,8 @@ class MergeRequestWebhookTest {
 
         assertThat(records.findByMergeRequest(9, 3))
                 .singleElement()
-                .extracting(ReviewRecordStore.ReviewRecord::outcome)
-                .isEqualTo(ReviewRecordStore.ReviewRecord.Outcome.SUCCESS);
+                .extracting(ReviewRecordEntity::getOutcome)
+                .isEqualTo("SUCCESS");
         assertThat(REVIEWER.calls).isEqualTo(1);
         assertThat(GITLAB.notes).isEmpty();
     }
@@ -113,8 +115,8 @@ class MergeRequestWebhookTest {
                 assertThat(note.body).isEqualTo("审查失败：合并请求的 diff 尚未就绪。2026-10-15T09:00:00Z"));
         assertThat(records.findByMergeRequest(9, 3))
                 .singleElement()
-                .extracting(ReviewRecordStore.ReviewRecord::outcome)
-                .isEqualTo(ReviewRecordStore.ReviewRecord.Outcome.FAILED);
+                .extracting(ReviewRecordEntity::getOutcome)
+                .isEqualTo("FAILED");
     }
 
     @Test
@@ -136,10 +138,10 @@ class MergeRequestWebhookTest {
         assertThat(GITLAB.notes).isEmpty();
         assertThat(GITLAB.deletedNoteIds).containsExactly(1L);
         assertThat(records.findByMergeRequest(9, 3))
-                .extracting(ReviewRecordStore.ReviewRecord::outcome)
+                .extracting(ReviewRecordEntity::getOutcome)
                 .containsExactly(
-                        ReviewRecordStore.ReviewRecord.Outcome.FAILED,
-                        ReviewRecordStore.ReviewRecord.Outcome.SUCCESS);
+                        "FAILED",
+                        "SUCCESS");
     }
 
     @Test
@@ -160,13 +162,13 @@ class MergeRequestWebhookTest {
         assertThat(GITLAB.notes.get(1).body).isEqualTo("响应体没有关闭。");
         assertThat(findings.findByMergeRequest(9, 3)).satisfies(saved -> {
             assertThat(saved).hasSize(2);
-            assertThat(saved.get(0).discussionId()).isEqualTo(GITLAB.notes.get(0).id);
-            assertThat(saved.get(0).category()).isEqualTo("编码规范");
-            assertThat(saved.get(0).citation()).isEqualTo("命名");
-            assertThat(saved.get(0).commentBody()).isEqualTo("这里的命名看不出用途。");
-            assertThat(saved.get(0).headSha()).isEqualTo("abc123");
-            assertThat(saved.get(1).newLine()).isNull();
-            assertThat(saved.get(1).category()).isEqualTo("缺陷");
+            assertThat(saved.get(0).getDiscussionId()).isEqualTo(GITLAB.notes.get(0).id);
+            assertThat(saved.get(0).getCategory()).isEqualTo("编码规范");
+            assertThat(saved.get(0).getCitation()).isEqualTo("命名");
+            assertThat(saved.get(0).getCommentBody()).isEqualTo("这里的命名看不出用途。");
+            assertThat(saved.get(0).getHeadSha()).isEqualTo("abc123");
+            assertThat(saved.get(1).getNewLine()).isNull();
+            assertThat(saved.get(1).getCategory()).isEqualTo("缺陷");
         });
     }
 
@@ -181,13 +183,13 @@ class MergeRequestWebhookTest {
         postWebhook(openPayload());
 
         assertThat(findings.findByMergeRequest(9, 3)).singleElement()
-                .extracting(FindingStore.Finding::commentBody)
+                .extracting(FindingEntity::getCommentBody)
                 .isEqualTo("错误没有检查。");
         assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body)
                 .containsExactly("错误没有检查。", "审查失败：有 1 条没能写回。2026-10-15T09:00:00Z");
         assertThat(records.findByMergeRequest(9, 3))
-                .extracting(ReviewRecordStore.ReviewRecord::outcome)
-                .containsExactly(ReviewRecordStore.ReviewRecord.Outcome.FAILED);
+                .extracting(ReviewRecordEntity::getOutcome)
+                .containsExactly("FAILED");
     }
 
     private void postWebhook(ObjectNode body) throws Exception {

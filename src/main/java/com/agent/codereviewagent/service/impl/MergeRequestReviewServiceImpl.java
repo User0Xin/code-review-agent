@@ -1,13 +1,15 @@
 package com.agent.codereviewagent.service.impl;
 
-import com.agent.codereviewagent.utils.ReviewClock;
-import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.config.DiffWaitProperties;
+import com.agent.codereviewagent.models.entity.FindingEntity;
+import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
+import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
-import com.agent.codereviewagent.mapper.FindingStore;
-import com.agent.codereviewagent.mapper.ReviewRecordStore;
+import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
+import com.agent.codereviewagent.utils.ReviewClock;
+import com.agent.codereviewagent.utils.Sleeper;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
@@ -24,23 +26,23 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
 
     private final GitlabClient gitlabClient;
     private final Reviewer reviewer;
-    private final ReviewRecordStore records;
-    private final FindingStore findingsStore;
+    private final ReviewRecordService reviewRecordService;
+    private final FindingService findingService;
     private final ReviewClock clock;
     private final Sleeper sleeper;
     private final DiffWaitProperties diffWait;
 
     public MergeRequestReviewServiceImpl(GitlabClient gitlabClient,
                                          Reviewer reviewer,
-                                         ReviewRecordStore records,
-                                         FindingStore findingsStore,
+                                         ReviewRecordService reviewRecordService,
+                                         FindingService findingService,
                                          ReviewClock clock,
                                          Sleeper sleeper,
                                          DiffWaitProperties diffWait) {
         this.gitlabClient = gitlabClient;
         this.reviewer = reviewer;
-        this.records = records;
-        this.findingsStore = findingsStore;
+        this.reviewRecordService = reviewRecordService;
+        this.findingService = findingService;
         this.clock = clock;
         this.sleeper = sleeper;
         this.diffWait = diffWait;
@@ -74,16 +76,11 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回");
             return;
         }
-        records.save(new ReviewRecordStore.ReviewRecord(
-                projectId,
-                mergeRequestIid,
-                ReviewRecordStore.ReviewRecord.Outcome.SUCCESS,
-                null,
-                clock.now()));
+        reviewRecordService.recordSuccess(reviewRecord(projectId, mergeRequestIid, null, clock.now()));
         // 已写回的发现都留下。若之前留过失败讨论，删掉它。
-        records.failureNoteId(projectId, mergeRequestIid).ifPresent(noteId -> {
+        reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId -> {
             gitlabClient.deleteNote(projectId, mergeRequestIid, noteId);
-            records.forgetFailureNote(projectId, mergeRequestIid);
+            reviewRecordService.forgetFailureNote(projectId, mergeRequestIid);
         });
     }
 
@@ -100,7 +97,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 continue;
             }
             try {
-                findingsStore.save(new FindingStore.Finding(
+                findingService.recordPostedFinding(finding(
                         projectId,
                         mergeRequestIid,
                         discussionId,
@@ -151,20 +148,52 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
 
     /** 同一合并请求只留最新一条失败概览讨论：先删旧的，再写新的，并记住新 note id。 */
     private void fail(long projectId, long mergeRequestIid, String reason) {
-        records.failureNoteId(projectId, mergeRequestIid).ifPresent(noteId ->
+        reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId ->
                 gitlabClient.deleteNote(projectId, mergeRequestIid, noteId));
         Instant occurredAt = clock.now();
         long noteId = gitlabClient.createOverviewDiscussion(
                 projectId,
                 mergeRequestIid,
                 failureBody(reason, occurredAt));
-        records.rememberFailureNote(projectId, mergeRequestIid, noteId);
-        records.save(new ReviewRecordStore.ReviewRecord(
-                projectId,
-                mergeRequestIid,
-                ReviewRecordStore.ReviewRecord.Outcome.FAILED,
-                reason,
-                occurredAt));
+        reviewRecordService.recordFailure(
+                reviewRecord(projectId, mergeRequestIid, reason, occurredAt),
+                noteId);
+    }
+
+    private static ReviewRecordEntity reviewRecord(long projectId,
+                                                    long mergeRequestIid,
+                                                    String reason,
+                                                    Instant occurredAt) {
+        ReviewRecordEntity record = new ReviewRecordEntity();
+        record.setProjectId(projectId);
+        record.setMergeRequestIid(mergeRequestIid);
+        record.setReason(reason);
+        record.setOccurredAt(occurredAt.toString());
+        return record;
+    }
+
+    private static FindingEntity finding(long projectId,
+                                         long mergeRequestIid,
+                                         long discussionId,
+                                         String path,
+                                         Integer newLine,
+                                         Integer oldLine,
+                                         String category,
+                                         String citation,
+                                         String commentBody,
+                                         String headSha) {
+        FindingEntity finding = new FindingEntity();
+        finding.setProjectId(projectId);
+        finding.setMergeRequestIid(mergeRequestIid);
+        finding.setDiscussionId(discussionId);
+        finding.setPath(path);
+        finding.setNewLine(newLine);
+        finding.setOldLine(oldLine);
+        finding.setCategory(category);
+        finding.setCitation(citation);
+        finding.setCommentBody(commentBody);
+        finding.setHeadSha(headSha);
+        return finding;
     }
 
     /** 失败讨论正文只有原因和时间。 */
