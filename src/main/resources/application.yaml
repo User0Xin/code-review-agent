@@ -1,6 +1,18 @@
 spring:
   application:
-    name: demo01
+    name: code-review-agent
+  datasource:
+    # SQLite 是进程内数据库。可用 REVIEW_DATABASE_PATH 指定持久化文件的绝对路径。
+    url: jdbc:sqlite:${REVIEW_DATABASE_PATH:./review-records.db}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      # SQLite 同一时刻只有一个写事务，单连接可避免本服务内部争抢写锁。
+      maximum-pool-size: 1
+      connection-test-query: SELECT 1
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
   mvc:
     async:
       request-timeout: 120s
@@ -24,6 +36,16 @@ spring:
 # 换成支持函数调用的模型（如百炼 qwen-plus）后，把这里改成 true。
 demo:
   tools-enabled: false
+
+# diff 未就绪时的重试。超过 max-attempts 后留下一条失败概览讨论。
+review:
+  diff-wait:
+    max-attempts: 3
+    interval: 2s
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
 
 server:
   port: 8088
