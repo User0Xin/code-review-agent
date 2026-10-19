@@ -1,6 +1,7 @@
 package com.agent.codereviewagent.controller;
 
 
+import com.agent.codereviewagent.common.Result;
 import com.agent.codereviewagent.models.dto.AgentChatRequest;
 import com.agent.codereviewagent.models.dto.AgentChatResponse;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
@@ -35,22 +36,22 @@ public class AiController {
     }
 
     @GetMapping("/chat")
-    public Map<String, String> chat(@RequestParam String message) {
+    public Result<Map<String, String>> chat(@RequestParam String message) {
         requireMessage(message);
         String answer = chatClient.prompt().user(message).call().content();
-        return Map.of("answer", answer == null ? "" : answer);
+        return Result.success(Map.of("answer", answer == null ? "" : answer));
     }
 
     @GetMapping("/agent")
-    public AgentChatResponse agent(@RequestParam String message,
-                                   @RequestParam(defaultValue = "default") String threadId) throws GraphRunnerException {
-        return askAgent(message, threadId);
+    public Result<AgentChatResponse> agent(@RequestParam String message,
+                                           @RequestParam(defaultValue = "default") String threadId) throws GraphRunnerException {
+        return Result.success(askAgent(message, threadId));
     }
 
     @PostMapping("/agent")
-    public AgentChatResponse agent(@RequestBody AgentChatRequest request) throws GraphRunnerException {
+    public Result<AgentChatResponse> agent(@RequestBody AgentChatRequest request) throws GraphRunnerException {
         String threadId = request.threadId() == null || request.threadId().isBlank() ? "default" : request.threadId();
-        return askAgent(request.message(), threadId);
+        return Result.success(askAgent(request.message(), threadId));
     }
 
     @GetMapping(value = "/agent/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
