@@ -15,6 +15,11 @@ public record MergeRequestWebhookRequest(
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record ObjectAttributes(String action, Long iid, String oldrev) {
+    public record ObjectAttributes(
+            String action,
+            Long iid,
+            String oldrev,
+            @JsonProperty("source_branch") String sourceBranch,
+            String description) {
     }
 }

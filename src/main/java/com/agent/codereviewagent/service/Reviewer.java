@@ -7,7 +7,12 @@ public interface Reviewer {
 
     ReviewFindings review(ReviewRequest request);
 
-    record ReviewRequest(long projectId, long mergeRequestIid, String headSha, List<PriorFinding> priorFindings) {
+    record ReviewRequest(
+            long projectId,
+            long mergeRequestIid,
+            String headSha,
+            List<PriorFinding> priorFindings,
+            Spec spec) {
     }
 
     /** 这次审查之前已经写回的发现，以及讨论里已有的回复。 */
@@ -43,5 +48,16 @@ public interface Reviewer {
         public static ReviewFindings of(List<CommentDraft> drafts) {
             return new ReviewFindings(List.copyOf(drafts), List.of());
         }
+    }
+
+    /** 这次审查要对照的 spec。skipped 为真时，工作项和仓库文档都没有。 */
+    record SpecDocument(String path, String content) {
+    }
+
+    record Spec(
+            String workItemText,
+            List<SpecDocument> documents,
+            String mergeRequestDescription,
+            boolean skipped) {
     }
 }

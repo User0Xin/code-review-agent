@@ -8,6 +8,8 @@ import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
+import com.agent.codereviewagent.service.SpecDocumentPicker;
+import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +52,8 @@ class MergeRequestWebhookTest {
     private static final Instant NOW = Instant.parse("2026-10-15T09:00:00Z");
     private static final FakeGitlabImpl GITLAB = new FakeGitlabImpl();
     private static final RecordingReviewerImpl REVIEWER = new RecordingReviewerImpl();
+    private static final FakeWorkItems WORK_ITEMS = new FakeWorkItems();
+    private static final FakeSpecPicker PICKER = new FakeSpecPicker();
 
     @Autowired
     private MockMvc mockMvc;
@@ -73,6 +77,9 @@ class MergeRequestWebhookTest {
         REVIEWER.findings = Reviewer.ReviewFindings.none();
         REVIEWER.resolvedDiscussionIds = List.of();
         REVIEWER.lastRequest = null;
+        WORK_ITEMS.reset();
+        PICKER.reset();
+        GITLAB.clearFiles();
         jdbcTemplate.update("DELETE FROM review_failure_note");
         jdbcTemplate.update("DELETE FROM review_record");
         jdbcTemplate.update("DELETE FROM finding");
@@ -285,6 +292,56 @@ class MergeRequestWebhookTest {
                 .containsExactly("错误没有检查。", "错误没有检查。");
     }
 
+    @Test
+    void aWorkItemAndChosenDocumentEnterTheReview() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.file("docs/design.md", "增加导出字段");
+        GITLAB.file("vendor/lib.go", "忽略");
+        PICKER.chosen = java.util.List.of("docs/design.md", "vendor/lib.go", "docs/../secret.md");
+        WORK_ITEMS.text = java.util.Map.of("7058321625", "工作项要求导出");
+
+        postWebhook(payload("open", null, "feature/7058321625-export", "描述只是补充"));
+
+        assertThat(PICKER.seen).containsExactly("docs/design.md");
+        assertThat(GITLAB.readRefs).containsExactly("abc123:docs/design.md");
+        assertThat(REVIEWER.lastRequest.spec().skipped()).isFalse();
+        assertThat(REVIEWER.lastRequest.spec().workItemText()).isEqualTo("工作项要求导出");
+        assertThat(REVIEWER.lastRequest.spec().documents()).singleElement()
+                .extracting(Reviewer.SpecDocument::content)
+                .isEqualTo("增加导出字段");
+        assertThat(REVIEWER.lastRequest.spec().mergeRequestDescription()).isEqualTo("描述只是补充");
+        assertThat(records.findByMergeRequest(9, 3).get(0).getSpecSkipped()).isFalse();
+        assertThat(records.findByMergeRequest(9, 3).get(0).getSpecDocumentPaths()).isEqualTo("docs/design.md");
+        assertThat(GITLAB.notes).isEmpty();
+    }
+
+    @Test
+    void missingWorkItemAndDocumentsSkipSpecWithoutAComment() throws Exception {
+        GITLAB.readyWith("abc123");
+
+        postWebhook(payload("open", null, "main", "只有合并请求描述"));
+
+        assertThat(REVIEWER.lastRequest.spec().skipped()).isTrue();
+        assertThat(REVIEWER.lastRequest.spec().workItemText()).isNull();
+        assertThat(REVIEWER.lastRequest.spec().documents()).isEmpty();
+        assertThat(records.findByMergeRequest(9, 3).get(0).getSpecSkipped()).isTrue();
+        assertThat(GITLAB.notes).isEmpty();
+        assertThat(WORK_ITEMS.reads).isZero();
+    }
+
+    @Test
+    void eachReviewReadsTheCurrentSpec() throws Exception {
+        GITLAB.readyWith("abc123");
+        WORK_ITEMS.text = java.util.Map.of("42", "第一版");
+        postWebhook(payload("open", null, "feature/42-one", null));
+        WORK_ITEMS.text = java.util.Map.of("42", "第二版");
+
+        postWebhook(payload("update", "oldsha", "feature/42-one", null));
+
+        assertThat(REVIEWER.lastRequest.spec().workItemText()).isEqualTo("第二版");
+        assertThat(WORK_ITEMS.reads).isEqualTo(2);
+    }
+
     private void postWebhook(ObjectNode body) throws Exception {
         mockMvc.perform(post("/gitlab/webhooks/merge-requests")
                         .header("X-Gitlab-Event", "Merge Request Hook")
@@ -304,6 +361,10 @@ class MergeRequestWebhookTest {
     }
 
     private ObjectNode payload(String action, String oldrev) {
+        return payload(action, oldrev, null, null);
+    }
+
+    private ObjectNode payload(String action, String oldrev, String sourceBranch, String description) {
         ObjectNode root = json.createObjectNode();
         root.put("object_kind", "merge_request");
         root.putObject("project").put("id", 9);
@@ -313,6 +374,12 @@ class MergeRequestWebhookTest {
         attributes.putObject("last_commit").put("id", "abc123");
         if (oldrev != null) {
             attributes.put("oldrev", oldrev);
+        }
+        if (sourceBranch != null) {
+            attributes.put("source_branch", sourceBranch);
+        }
+        if (description != null) {
+            attributes.put("description", description);
         }
         return root;
     }
@@ -344,6 +411,18 @@ class MergeRequestWebhookTest {
             return duration -> {
             };
         }
+
+        @Bean
+        @Primary
+        WorkItemClient workItemClient() {
+            return WORK_ITEMS;
+        }
+
+        @Bean
+        @Primary
+        SpecDocumentPicker specDocumentPicker() {
+            return PICKER;
+        }
     }
 
     static final class FakeGitlabImpl implements GitlabClient {
@@ -357,6 +436,8 @@ class MergeRequestWebhookTest {
         private int throwOnCreateNumber;
         private final Map<Long, List<String>> replies = new HashMap<>();
         private final List<Long> resolved = new ArrayList<>();
+        private final java.util.LinkedHashMap<String, String> files = new java.util.LinkedHashMap<>();
+        private final List<String> readRefs = new ArrayList<>();
 
         void readyWith(String headSha) {
             diff = Optional.of(new DiffRefs(headSha));
@@ -371,7 +452,18 @@ class MergeRequestWebhookTest {
             throwOnCreateNumber = 0;
             replies.clear();
             resolved.clear();
+            files.clear();
+            readRefs.clear();
             noteIds.set(0);
+        }
+
+        void file(String path, String content) {
+            files.put(path, content);
+        }
+
+        void clearFiles() {
+            files.clear();
+            readRefs.clear();
         }
 
         void reply(long discussionId, String body) {
@@ -418,6 +510,17 @@ class MergeRequestWebhookTest {
         }
 
         @Override
+        public List<String> listFiles(long projectId, String ref) {
+            return new ArrayList<>(files.keySet());
+        }
+
+        @Override
+        public String readFile(long projectId, String path, String ref) {
+            readRefs.add(ref + ":" + path);
+            return files.getOrDefault(path, "");
+        }
+
+        @Override
         public void deleteNote(long projectId, long mergeRequestIid, long noteId) {
             deletedNoteIds.add(noteId);
             notes.removeIf(note -> note.id == noteId);
@@ -439,6 +542,40 @@ class MergeRequestWebhookTest {
             calls++;
             lastRequest = request;
             return new ReviewFindings(findings.drafts(), resolvedDiscussionIds);
+        }
+    }
+
+    static final class FakeWorkItems implements WorkItemClient {
+
+        private java.util.Map<String, String> text = java.util.Map.of();
+        private int reads;
+
+        void reset() {
+            text = java.util.Map.of();
+            reads = 0;
+        }
+
+        @Override
+        public java.util.Optional<String> readPlainText(String workItemId) {
+            reads++;
+            return java.util.Optional.ofNullable(text.get(workItemId));
+        }
+    }
+
+    static final class FakeSpecPicker implements SpecDocumentPicker {
+
+        private java.util.List<String> chosen = java.util.List.of();
+        private java.util.List<String> seen = java.util.List.of();
+
+        void reset() {
+            chosen = java.util.List.of();
+            seen = java.util.List.of();
+        }
+
+        @Override
+        public java.util.List<String> pick(java.util.List<String> candidates) {
+            seen = java.util.List.copyOf(candidates);
+            return chosen;
         }
     }
 }
