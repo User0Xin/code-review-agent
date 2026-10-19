@@ -10,9 +10,7 @@ import com.agent.codereviewagent.service.MergeRequestReviewService;
 import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.SpecPaths;
 import com.agent.codereviewagent.service.WorkItemClient;
-import com.agent.codereviewagent.service.WorkItemIds;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
 import org.springframework.stereotype.Service;
@@ -20,6 +18,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 决定一条合并请求 webhook 要不要审查。
@@ -250,15 +249,15 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private Reviewer.Spec loadSpec(long projectId,
                                    MergeRequestWebhookRequest.ObjectAttributes attributes,
                                    String headSha) {
-        String workItemText = WorkItemIds.fromBranch(attributes.sourceBranch())
+        String workItemText = workItemId(attributes.sourceBranch())
                 .flatMap(workItemClient::readPlainText)
                 .orElse(null);
         java.util.ArrayList<Reviewer.SpecDocument> documents = new java.util.ArrayList<>();
         java.util.List<String> candidates = gitlabClient.listFiles(projectId, headSha).stream()
-                .filter(SpecPaths::isCandidate)
+                .filter(MergeRequestReviewServiceImpl::specDocument)
                 .toList();
         for (String path : specDocumentPicker.pick(candidates)) {
-            if (!SpecPaths.isCandidate(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
+            if (!specDocument(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
                 continue;
             }
             documents.add(new Reviewer.SpecDocument(path, gitlabClient.readFile(projectId, path, headSha)));
@@ -342,6 +341,47 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     /** 失败讨论正文只有原因和时间。 */
     static String failureBody(String reason, Instant occurredAt) {
         return "审查失败：" + reason + "。" + occurredAt;
+    }
+
+    /** 从源分支名取出工作项 ID，例如 feature/7058321625-openapi。 */
+    private static Optional<String> workItemId(String sourceBranch) {
+        if (sourceBranch == null || sourceBranch.isBlank()) {
+            return Optional.empty();
+        }
+        String name = sourceBranch;
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0) {
+            name = name.substring(slash + 1);
+        }
+        int dash = name.indexOf('-');
+        if (dash <= 0) {
+            return Optional.empty();
+        }
+        String id = name.substring(0, dash);
+        return id.chars().allMatch(Character::isDigit) ? Optional.of(id) : Optional.empty();
+    }
+
+    /** 仓库文档里可以进入 spec 的路径。 */
+    private static boolean specDocument(String path) {
+        if (path == null || path.isBlank() || path.contains("..")) {
+            return false;
+        }
+        String normalized = path.replace('\\', '/');
+        if (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        if (!normalized.startsWith("docs/")) {
+            return false;
+        }
+        for (String segment : normalized.split("/")) {
+            if (segment.equals("vendor")
+                    || segment.equals("node_modules")
+                    || segment.equals(".git")
+                    || segment.equals("dist")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
