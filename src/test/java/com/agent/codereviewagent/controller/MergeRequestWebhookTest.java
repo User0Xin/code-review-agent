@@ -26,7 +26,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -69,6 +71,8 @@ class MergeRequestWebhookTest {
         GITLAB.reset();
         REVIEWER.calls = 0;
         REVIEWER.findings = Reviewer.ReviewFindings.none();
+        REVIEWER.resolvedDiscussionIds = List.of();
+        REVIEWER.lastRequest = null;
         jdbcTemplate.update("DELETE FROM review_failure_note");
         jdbcTemplate.update("DELETE FROM review_record");
         jdbcTemplate.update("DELETE FROM finding");
@@ -149,7 +153,7 @@ class MergeRequestWebhookTest {
     @Test
     void findingsArePostedOnceAndStored() throws Exception {
         GITLAB.readyWith("abc123");
-        REVIEWER.findings = new Reviewer.ReviewFindings(List.of(
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
                 new Reviewer.CommentDraft("main.go", 12, null, "编码规范", "命名", "这里的命名看不出用途。"),
                 new Reviewer.CommentDraft("README.md", null, null, "缺陷", null, "响应体没有关闭。")));
 
@@ -178,7 +182,7 @@ class MergeRequestWebhookTest {
     void aFailedWriteKeepsTheFindingsAlreadyPosted() throws Exception {
         GITLAB.readyWith("abc123");
         GITLAB.throwOnCreateNumber = 2;
-        REVIEWER.findings = new Reviewer.ReviewFindings(List.of(
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
                 new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。"),
                 new Reviewer.CommentDraft("main.go", 9, null, "缺陷", null, "锁没有释放。")));
 
@@ -192,6 +196,93 @@ class MergeRequestWebhookTest {
         assertThat(records.findByMergeRequest(9, 3))
                 .extracting(ReviewRecordEntity::getOutcome)
                 .containsExactly("FAILED");
+    }
+
+    @Test
+    void aLaterReviewKeepsTheExistingDiscussionAndShowsItToTheReviewer() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
+        postWebhook(openPayload());
+        long discussionId = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
+        REVIEWER.findings = Reviewer.ReviewFindings.none();
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(REVIEWER.lastRequest.priorFindings()).singleElement()
+                .extracting(Reviewer.PriorFinding::discussionId, Reviewer.PriorFinding::commentBody)
+                .containsExactly(discussionId, "错误没有检查。");
+        assertThat(GITLAB.deletedNoteIds).doesNotContain(discussionId);
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body).containsExactly("错误没有检查。");
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+    }
+
+    @Test
+    void aFixedFindingIsResolvedWithoutDeletingTheRecord() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
+        postWebhook(openPayload());
+        long discussionId = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
+        REVIEWER.findings = Reviewer.ReviewFindings.none();
+        REVIEWER.resolvedDiscussionIds = List.of(discussionId);
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(GITLAB.resolved).containsExactly(discussionId);
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::id).contains(discussionId);
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+    }
+
+    @Test
+    void anOpenFindingIsNotPostedAgainWhenOnlyTheLineMoves() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
+        postWebhook(openPayload());
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 20, null, "缺陷", null, "错误没有检查。")));
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body).containsExactly("错误没有检查。");
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+    }
+
+    @Test
+    void aDeclinedFindingIsNotRaisedAgain() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
+        postWebhook(openPayload());
+        long discussionId = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
+        GITLAB.reply(discussionId, "不需要修改");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "这里还是没检查错误。")));
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(GITLAB.notes).hasSize(1);
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+    }
+
+    @Test
+    void aResolvedProblemThatReturnsIsANewFinding() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
+        postWebhook(openPayload());
+        long discussionId = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
+        REVIEWER.resolvedDiscussionIds = List.of(discussionId);
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 30, null, "缺陷", null, "错误没有检查。")));
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(GITLAB.resolved).containsExactly(discussionId);
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(2);
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body)
+                .containsExactly("错误没有检查。", "错误没有检查。");
     }
 
     private void postWebhook(ObjectNode body) throws Exception {
@@ -264,6 +355,8 @@ class MergeRequestWebhookTest {
         private int diffReads;
         private int creates;
         private int throwOnCreateNumber;
+        private final Map<Long, List<String>> replies = new HashMap<>();
+        private final List<Long> resolved = new ArrayList<>();
 
         void readyWith(String headSha) {
             diff = Optional.of(new DiffRefs(headSha));
@@ -276,7 +369,13 @@ class MergeRequestWebhookTest {
             diffReads = 0;
             creates = 0;
             throwOnCreateNumber = 0;
+            replies.clear();
+            resolved.clear();
             noteIds.set(0);
+        }
+
+        void reply(long discussionId, String body) {
+            replies.computeIfAbsent(discussionId, ignored -> new ArrayList<>()).add(body);
         }
 
         @Override
@@ -309,6 +408,16 @@ class MergeRequestWebhookTest {
         }
 
         @Override
+        public List<String> listReplies(long projectId, long mergeRequestIid, long discussionId) {
+            return List.copyOf(replies.getOrDefault(discussionId, List.of()));
+        }
+
+        @Override
+        public void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId) {
+            resolved.add(discussionId);
+        }
+
+        @Override
         public void deleteNote(long projectId, long mergeRequestIid, long noteId) {
             deletedNoteIds.add(noteId);
             notes.removeIf(note -> note.id == noteId);
@@ -322,11 +431,14 @@ class MergeRequestWebhookTest {
 
         private int calls;
         private ReviewFindings findings = ReviewFindings.none();
+        private List<Long> resolvedDiscussionIds = List.of();
+        private ReviewRequest lastRequest;
 
         @Override
         public ReviewFindings review(ReviewRequest request) {
             calls++;
-            return findings;
+            lastRequest = request;
+            return new ReviewFindings(findings.drafts(), resolvedDiscussionIds);
         }
     }
 }
