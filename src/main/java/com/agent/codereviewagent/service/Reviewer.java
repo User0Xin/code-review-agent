@@ -7,7 +7,18 @@ public interface Reviewer {
 
     ReviewFindings review(ReviewRequest request);
 
-    record ReviewRequest(long projectId, long mergeRequestIid, String headSha) {
+    record ReviewRequest(long projectId, long mergeRequestIid, String headSha, List<PriorFinding> priorFindings) {
+    }
+
+    /** 这次审查之前已经写回的发现，以及讨论里已有的回复。 */
+    record PriorFinding(
+            long discussionId,
+            String path,
+            Integer newLine,
+            Integer oldLine,
+            String category,
+            String commentBody,
+            List<String> replies) {
     }
 
     /**
@@ -23,10 +34,14 @@ public interface Reviewer {
             String commentBody) {
     }
 
-    record ReviewFindings(List<CommentDraft> drafts) {
+    record ReviewFindings(List<CommentDraft> drafts, List<Long> resolvedDiscussionIds) {
 
         public static ReviewFindings none() {
-            return new ReviewFindings(List.of());
+            return new ReviewFindings(List.of(), List.of());
+        }
+
+        public static ReviewFindings of(List<CommentDraft> drafts) {
+            return new ReviewFindings(List.copyOf(drafts), List.of());
         }
     }
 }

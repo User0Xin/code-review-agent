@@ -14,6 +14,8 @@ import com.agent.codereviewagent.utils.Sleeper;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 决定一条合并请求 webhook 要不要审查。
@@ -72,9 +74,19 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             fail(projectId, mergeRequestIid, DIFF_NOT_READY);
             return;
         }
-        Reviewer.ReviewFindings findings = reviewer.review(
-                new Reviewer.ReviewRequest(projectId, mergeRequestIid, diffRefs.headSha()));
-        int failed = postDrafts(projectId, mergeRequestIid, diffRefs.headSha(), findings.drafts());
+        List<FindingEntity> existing = findingService.findByMergeRequest(projectId, mergeRequestIid);
+        List<Reviewer.PriorFinding> priorFindings = priorFindings(projectId, mergeRequestIid, existing);
+        Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
+                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings));
+        List<Long> resolved = findings.resolvedDiscussionIds() == null
+                ? List.of()
+                : findings.resolvedDiscussionIds();
+        int failed = postDrafts(
+                projectId,
+                mergeRequestIid,
+                diffRefs.headSha(),
+                stillOpen(findings.drafts(), existing, priorFindings, resolved));
+        resolveKnownDiscussions(projectId, mergeRequestIid, existing, priorFindings, resolved);
         if (failed > 0) {
             fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回");
             return;
@@ -132,6 +144,96 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                     draft.commentBody());
         }
         return gitlabClient.createOverviewDiscussion(projectId, mergeRequestIid, draft.commentBody());
+    }
+
+    private List<Reviewer.PriorFinding> priorFindings(long projectId,
+                                                      long mergeRequestIid,
+                                                      List<FindingEntity> existing) {
+        List<Reviewer.PriorFinding> prior = new ArrayList<>();
+        for (FindingEntity finding : existing) {
+            long discussionId = finding.getDiscussionId();
+            prior.add(new Reviewer.PriorFinding(
+                    discussionId,
+                    finding.getPath(),
+                    finding.getNewLine(),
+                    finding.getOldLine(),
+                    finding.getCategory(),
+                    finding.getCommentBody(),
+                    gitlabClient.listReplies(projectId, mergeRequestIid, discussionId)));
+        }
+        return prior;
+    }
+
+    /** 仍开着的同一问题，以及作者已表明无需修改的问题，不再另开讨论。行号变化不算新问题。 */
+    private static List<Reviewer.CommentDraft> stillOpen(List<Reviewer.CommentDraft> drafts,
+                                                         List<FindingEntity> existing,
+                                                         List<Reviewer.PriorFinding> priorFindings,
+                                                         List<Long> resolved) {
+        List<Reviewer.CommentDraft> kept = new ArrayList<>();
+        for (Reviewer.CommentDraft draft : drafts) {
+            if (!repeatsOpenOrDeclined(draft, existing, priorFindings, resolved)) {
+                kept.add(draft);
+            }
+        }
+        return kept;
+    }
+
+    private static boolean repeatsOpenOrDeclined(Reviewer.CommentDraft draft,
+                                                 List<FindingEntity> existing,
+                                                 List<Reviewer.PriorFinding> priorFindings,
+                                                 List<Long> resolved) {
+        for (FindingEntity finding : existing) {
+            if (finding.getDiscussionId() == null || resolved.contains(finding.getDiscussionId())) {
+                continue;
+            }
+            if (!samePathAndCategory(draft, finding)) {
+                continue;
+            }
+            if (sameBody(draft, finding) || declined(priorFindings, finding.getDiscussionId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean samePathAndCategory(Reviewer.CommentDraft draft, FindingEntity finding) {
+        return java.util.Objects.equals(draft.path(), finding.getPath())
+                && java.util.Objects.equals(draft.category(), finding.getCategory());
+    }
+
+    private static boolean sameBody(Reviewer.CommentDraft draft, FindingEntity finding) {
+        return java.util.Objects.equals(draft.commentBody(), finding.getCommentBody());
+    }
+
+    private static boolean declined(List<Reviewer.PriorFinding> priorFindings, long discussionId) {
+        for (Reviewer.PriorFinding prior : priorFindings) {
+            if (prior.discussionId() != discussionId || prior.replies() == null) {
+                continue;
+            }
+            for (String reply : prior.replies()) {
+                if (reply != null && reply.contains("不需要修改")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 只把这次 diff 消除的、且本来就存在的讨论标成已解决。不删除发现，也不删讨论。 */
+    private void resolveKnownDiscussions(long projectId,
+                                         long mergeRequestIid,
+                                         List<FindingEntity> existing,
+                                         List<Reviewer.PriorFinding> priorFindings,
+                                         List<Long> resolved) {
+        for (Long discussionId : resolved) {
+            if (discussionId == null || declined(priorFindings, discussionId)) {
+                continue;
+            }
+            boolean known = existing.stream().anyMatch(finding -> discussionId.equals(finding.getDiscussionId()));
+            if (known) {
+                gitlabClient.resolveDiscussion(projectId, mergeRequestIid, discussionId);
+            }
+        }
     }
 
     /** 立刻读一次 diff。没就绪再按间隔重试，总次数至少为 1。始终没有则返回 null。 */
