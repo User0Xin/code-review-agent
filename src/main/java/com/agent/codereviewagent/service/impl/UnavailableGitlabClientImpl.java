@@ -40,4 +40,14 @@ public class UnavailableGitlabClientImpl implements GitlabClient {
     public void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId) {
         throw new IllegalStateException("GitLab 客户端尚未配置");
     }
+
+    @Override
+    public List<String> listFiles(long projectId, String ref) {
+        throw new IllegalStateException("GitLab 客户端尚未配置");
+    }
+
+    @Override
+    public String readFile(long projectId, String path, String ref) {
+        throw new IllegalStateException("GitLab 客户端尚未配置");
+    }
 }

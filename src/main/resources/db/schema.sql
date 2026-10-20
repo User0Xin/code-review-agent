@@ -4,7 +4,9 @@ CREATE TABLE IF NOT EXISTS review_record (
     merge_request_iid INTEGER NOT NULL,
     outcome TEXT NOT NULL CHECK (outcome IN ('SUCCESS', 'FAILED')),
     reason TEXT,
-    occurred_at TEXT NOT NULL
+    occurred_at TEXT NOT NULL,
+    spec_skipped INTEGER,
+    spec_document_paths TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_record_merge_request

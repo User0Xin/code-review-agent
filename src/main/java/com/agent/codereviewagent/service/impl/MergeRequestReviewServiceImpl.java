@@ -9,6 +9,8 @@ import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
 import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
+import com.agent.codereviewagent.service.SpecDocumentPicker;
+import com.agent.codereviewagent.service.WorkItemClient;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
 import org.springframework.stereotype.Service;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 决定一条合并请求 webhook 要不要审查。
@@ -30,6 +33,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private final Reviewer reviewer;
     private final ReviewRecordService reviewRecordService;
     private final FindingService findingService;
+    private final WorkItemClient workItemClient;
+    private final SpecDocumentPicker specDocumentPicker;
     private final ReviewClock clock;
     private final Sleeper sleeper;
     private final DiffWaitProperties diffWait;
@@ -38,6 +43,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                                          Reviewer reviewer,
                                          ReviewRecordService reviewRecordService,
                                          FindingService findingService,
+                                         WorkItemClient workItemClient,
+                                         SpecDocumentPicker specDocumentPicker,
                                          ReviewClock clock,
                                          Sleeper sleeper,
                                          DiffWaitProperties diffWait) {
@@ -45,6 +52,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         this.reviewer = reviewer;
         this.reviewRecordService = reviewRecordService;
         this.findingService = findingService;
+        this.workItemClient = workItemClient;
+        this.specDocumentPicker = specDocumentPicker;
         this.clock = clock;
         this.sleeper = sleeper;
         this.diffWait = diffWait;
@@ -71,13 +80,14 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         }
         GitlabClient.DiffRefs diffRefs = waitForDiff(projectId, mergeRequestIid);
         if (diffRefs == null) {
-            fail(projectId, mergeRequestIid, DIFF_NOT_READY);
+            fail(projectId, mergeRequestIid, DIFF_NOT_READY, null);
             return;
         }
         List<FindingEntity> existing = findingService.findByMergeRequest(projectId, mergeRequestIid);
         List<Reviewer.PriorFinding> priorFindings = priorFindings(projectId, mergeRequestIid, existing);
+        Reviewer.Spec spec = loadSpec(projectId, attributes, diffRefs.headSha());
         Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
-                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings));
+                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec));
         List<Long> resolved = findings.resolvedDiscussionIds() == null
                 ? List.of()
                 : findings.resolvedDiscussionIds();
@@ -88,10 +98,10 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 stillOpen(findings.drafts(), existing, priorFindings, resolved));
         resolveKnownDiscussions(projectId, mergeRequestIid, existing, priorFindings, resolved);
         if (failed > 0) {
-            fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回");
+            fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回", spec);
             return;
         }
-        reviewRecordService.recordSuccess(reviewRecord(projectId, mergeRequestIid, null, clock.now()));
+        reviewRecordService.recordSuccess(reviewRecord(projectId, mergeRequestIid, null, clock.now(), spec));
         // 已写回的发现都留下。若之前留过失败讨论，删掉它。
         reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId -> {
             gitlabClient.deleteNote(projectId, mergeRequestIid, noteId);
@@ -236,6 +246,26 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         }
     }
 
+    private Reviewer.Spec loadSpec(long projectId,
+                                   MergeRequestWebhookRequest.ObjectAttributes attributes,
+                                   String headSha) {
+        String workItemText = workItemId(attributes.sourceBranch())
+                .flatMap(workItemClient::readPlainText)
+                .orElse(null);
+        java.util.ArrayList<Reviewer.SpecDocument> documents = new java.util.ArrayList<>();
+        java.util.List<String> candidates = gitlabClient.listFiles(projectId, headSha).stream()
+                .filter(MergeRequestReviewServiceImpl::specDocument)
+                .toList();
+        for (String path : specDocumentPicker.pick(candidates)) {
+            if (!specDocument(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
+                continue;
+            }
+            documents.add(new Reviewer.SpecDocument(path, gitlabClient.readFile(projectId, path, headSha)));
+        }
+        boolean skipped = workItemText == null && documents.isEmpty();
+        return new Reviewer.Spec(workItemText, java.util.List.copyOf(documents), attributes.description(), skipped);
+    }
+
     /** 立刻读一次 diff。没就绪再按间隔重试，总次数至少为 1。始终没有则返回 null。 */
     private GitlabClient.DiffRefs waitForDiff(long projectId, long mergeRequestIid) {
         int attempts = Math.max(diffWait.getMaxAttempts(), 1);
@@ -252,7 +282,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     }
 
     /** 同一合并请求只留最新一条失败概览讨论：先删旧的，再写新的，并记住新 note id。 */
-    private void fail(long projectId, long mergeRequestIid, String reason) {
+    private void fail(long projectId, long mergeRequestIid, String reason, Reviewer.Spec spec) {
         reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId ->
                 gitlabClient.deleteNote(projectId, mergeRequestIid, noteId));
         Instant occurredAt = clock.now();
@@ -261,19 +291,26 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 mergeRequestIid,
                 failureBody(reason, occurredAt));
         reviewRecordService.recordFailure(
-                reviewRecord(projectId, mergeRequestIid, reason, occurredAt),
+                reviewRecord(projectId, mergeRequestIid, reason, occurredAt, spec),
                 noteId);
     }
 
     private static ReviewRecordEntity reviewRecord(long projectId,
                                                     long mergeRequestIid,
                                                     String reason,
-                                                    Instant occurredAt) {
+                                                    Instant occurredAt,
+                                                    Reviewer.Spec spec) {
         ReviewRecordEntity record = new ReviewRecordEntity();
         record.setProjectId(projectId);
         record.setMergeRequestIid(mergeRequestIid);
         record.setReason(reason);
         record.setOccurredAt(occurredAt.toString());
+        if (spec != null) {
+            record.setSpecSkipped(spec.skipped());
+            record.setSpecDocumentPaths(spec.documents().stream()
+                    .map(Reviewer.SpecDocument::path)
+                    .collect(java.util.stream.Collectors.joining("\n")));
+        }
         return record;
     }
 
@@ -304,6 +341,47 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     /** 失败讨论正文只有原因和时间。 */
     static String failureBody(String reason, Instant occurredAt) {
         return "审查失败：" + reason + "。" + occurredAt;
+    }
+
+    /** 从源分支名取出工作项 ID，例如 feature/7058321625-openapi。 */
+    private static Optional<String> workItemId(String sourceBranch) {
+        if (sourceBranch == null || sourceBranch.isBlank()) {
+            return Optional.empty();
+        }
+        String name = sourceBranch;
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0) {
+            name = name.substring(slash + 1);
+        }
+        int dash = name.indexOf('-');
+        if (dash <= 0) {
+            return Optional.empty();
+        }
+        String id = name.substring(0, dash);
+        return id.chars().allMatch(Character::isDigit) ? Optional.of(id) : Optional.empty();
+    }
+
+    /** 仓库文档里可以进入 spec 的路径。 */
+    private static boolean specDocument(String path) {
+        if (path == null || path.isBlank() || path.contains("..")) {
+            return false;
+        }
+        String normalized = path.replace('\\', '/');
+        if (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        if (!normalized.startsWith("docs/")) {
+            return false;
+        }
+        for (String segment : normalized.split("/")) {
+            if (segment.equals("vendor")
+                    || segment.equals("node_modules")
+                    || segment.equals(".git")
+                    || segment.equals("dist")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

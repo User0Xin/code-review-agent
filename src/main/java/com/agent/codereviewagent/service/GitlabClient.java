@@ -18,6 +18,10 @@ public interface GitlabClient {
 
     void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId);
 
+    List<String> listFiles(long projectId, String ref);
+
+    String readFile(long projectId, String path, String ref);
+
     record DiffRefs(String headSha) {
     }
 }

@@ -22,4 +22,8 @@ public class ReviewRecordEntity {
     private String reason;
 
     private String occurredAt;
+
+    private Boolean specSkipped;
+
+    private String specDocumentPaths;
 }
