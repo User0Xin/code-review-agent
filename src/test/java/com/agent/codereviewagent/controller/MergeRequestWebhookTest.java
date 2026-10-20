@@ -8,6 +8,8 @@ import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
+import com.agent.codereviewagent.config.StandardsBranchProperties;
+import com.agent.codereviewagent.service.CodingStandardPicker;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
 import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -54,6 +56,7 @@ class MergeRequestWebhookTest {
     private static final RecordingReviewerImpl REVIEWER = new RecordingReviewerImpl();
     private static final FakeWorkItems WORK_ITEMS = new FakeWorkItems();
     private static final FakeSpecPicker PICKER = new FakeSpecPicker();
+    private static final FakeStandardPicker STANDARDS = new FakeStandardPicker();
 
     @Autowired
     private MockMvc mockMvc;
@@ -70,6 +73,9 @@ class MergeRequestWebhookTest {
     @Autowired
     private ObjectMapper json;
 
+    @Autowired
+    private StandardsBranchProperties standardsBranch;
+
     @BeforeEach
     void reset() {
         GITLAB.reset();
@@ -79,6 +85,8 @@ class MergeRequestWebhookTest {
         REVIEWER.lastRequest = null;
         WORK_ITEMS.reset();
         PICKER.reset();
+        STANDARDS.reset();
+        standardsBranch.setBranch("");
         GITLAB.clearFiles();
         jdbcTemplate.update("DELETE FROM review_failure_note");
         jdbcTemplate.update("DELETE FROM review_record");
@@ -342,6 +350,46 @@ class MergeRequestWebhookTest {
         assertThat(WORK_ITEMS.reads).isEqualTo(2);
     }
 
+    @Test
+    void standardsComeFromTheConfiguredBranchNotTheMergeRequest() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.file("docs/coding.md", "合并请求里的旧规范");
+        GITLAB.fileOn("dev", "docs/coding.md", "必须检查错误");
+        GITLAB.fileOn("dev", "vendor/lib.go", "忽略");
+        GITLAB.fileOn("dev", ".golangci.yml", "linters: {}");
+        STANDARDS.chosen = java.util.List.of("docs/coding.md", "vendor/lib.go", ".golangci.yml");
+        standardsBranch.setBranch("dev");
+
+        mockMvc.perform(post("/gitlab/webhooks/merge-requests")
+                        .header("X-Gitlab-Event", "Merge Request Hook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsBytes(openPayload())))
+                .andExpect(status().isOk());
+
+        assertThat(GITLAB.readRefs).contains("dev:docs/coding.md");
+        assertThat(GITLAB.readRefs).doesNotContain("abc123:docs/coding.md", "dev:vendor/lib.go", "dev:.golangci.yml");
+        assertThat(REVIEWER.lastRequest.codingStandards().documents()).singleElement()
+                .extracting(Reviewer.StandardDocument::content)
+                .isEqualTo("必须检查错误");
+        assertThat(REVIEWER.lastRequest.codingStandards().smellsApply()).isTrue();
+        assertThat(REVIEWER.lastRequest.codingStandards().precedence()).isEqualTo("编码规范优先");
+        assertThat(records.findByMergeRequest(9, 3).get(0).getStandardDocumentPaths()).isEqualTo("docs/coding.md");
+    }
+
+    @Test
+    void missingStandardsStillReviewWithSmellsAndOpenNoRevision() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.defaultBranchName = "main";
+
+        postWebhook(openPayload());
+
+        assertThat(REVIEWER.lastRequest.codingStandards().documents()).isEmpty();
+        assertThat(REVIEWER.lastRequest.codingStandards().smellsApply()).isTrue();
+        assertThat(records.findByMergeRequest(9, 3).get(0).getStandardDocumentPaths()).isEmpty();
+        assertThat(records.findByMergeRequest(9, 3).get(0).getOutcome()).isEqualTo("SUCCESS");
+        assertThat(GITLAB.notes).isEmpty();
+    }
+
     private void postWebhook(ObjectNode body) throws Exception {
         mockMvc.perform(post("/gitlab/webhooks/merge-requests")
                         .header("X-Gitlab-Event", "Merge Request Hook")
@@ -423,6 +471,12 @@ class MergeRequestWebhookTest {
         SpecDocumentPicker specDocumentPicker() {
             return PICKER;
         }
+
+        @Bean
+        @Primary
+        CodingStandardPicker codingStandardPicker() {
+            return STANDARDS;
+        }
     }
 
     static final class FakeGitlabImpl implements GitlabClient {
@@ -437,7 +491,9 @@ class MergeRequestWebhookTest {
         private final Map<Long, List<String>> replies = new HashMap<>();
         private final List<Long> resolved = new ArrayList<>();
         private final java.util.LinkedHashMap<String, String> files = new java.util.LinkedHashMap<>();
+        private final java.util.Map<String, java.util.Map<String, String>> filesByRef = new java.util.LinkedHashMap<>();
         private final List<String> readRefs = new ArrayList<>();
+        private String defaultBranchName = "main";
 
         void readyWith(String headSha) {
             diff = Optional.of(new DiffRefs(headSha));
@@ -453,7 +509,9 @@ class MergeRequestWebhookTest {
             replies.clear();
             resolved.clear();
             files.clear();
+            filesByRef.clear();
             readRefs.clear();
+            defaultBranchName = "main";
             noteIds.set(0);
         }
 
@@ -461,8 +519,13 @@ class MergeRequestWebhookTest {
             files.put(path, content);
         }
 
+        void fileOn(String ref, String path, String content) {
+            filesByRef.computeIfAbsent(ref, ignored -> new java.util.LinkedHashMap<>()).put(path, content);
+        }
+
         void clearFiles() {
             files.clear();
+            filesByRef.clear();
             readRefs.clear();
         }
 
@@ -511,13 +574,24 @@ class MergeRequestWebhookTest {
 
         @Override
         public List<String> listFiles(long projectId, String ref) {
+            if (filesByRef.containsKey(ref)) {
+                return new ArrayList<>(filesByRef.get(ref).keySet());
+            }
             return new ArrayList<>(files.keySet());
         }
 
         @Override
         public String readFile(long projectId, String path, String ref) {
             readRefs.add(ref + ":" + path);
+            if (filesByRef.containsKey(ref) && filesByRef.get(ref).containsKey(path)) {
+                return filesByRef.get(ref).get(path);
+            }
             return files.getOrDefault(path, "");
+        }
+
+        @Override
+        public String defaultBranch(long projectId) {
+            return defaultBranchName;
         }
 
         @Override
@@ -575,6 +649,20 @@ class MergeRequestWebhookTest {
         @Override
         public java.util.List<String> pick(java.util.List<String> candidates) {
             seen = java.util.List.copyOf(candidates);
+            return chosen;
+        }
+    }
+
+    static final class FakeStandardPicker implements CodingStandardPicker {
+
+        private java.util.List<String> chosen = java.util.List.of();
+
+        void reset() {
+            chosen = java.util.List.of();
+        }
+
+        @Override
+        public java.util.List<String> pick(java.util.List<String> candidates) {
             return chosen;
         }
     }

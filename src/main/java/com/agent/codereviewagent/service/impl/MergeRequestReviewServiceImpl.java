@@ -1,9 +1,11 @@
 package com.agent.codereviewagent.service.impl;
 
 import com.agent.codereviewagent.config.DiffWaitProperties;
+import com.agent.codereviewagent.config.StandardsBranchProperties;
 import com.agent.codereviewagent.models.dto.MergeRequestWebhookRequest;
 import com.agent.codereviewagent.models.entity.FindingEntity;
 import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
+import com.agent.codereviewagent.service.CodingStandardPicker;
 import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
@@ -35,6 +37,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private final FindingService findingService;
     private final WorkItemClient workItemClient;
     private final SpecDocumentPicker specDocumentPicker;
+    private final CodingStandardPicker codingStandardPicker;
+    private final StandardsBranchProperties standardsBranch;
     private final ReviewClock clock;
     private final Sleeper sleeper;
     private final DiffWaitProperties diffWait;
@@ -45,6 +49,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                                          FindingService findingService,
                                          WorkItemClient workItemClient,
                                          SpecDocumentPicker specDocumentPicker,
+                                         CodingStandardPicker codingStandardPicker,
+                                         StandardsBranchProperties standardsBranch,
                                          ReviewClock clock,
                                          Sleeper sleeper,
                                          DiffWaitProperties diffWait) {
@@ -54,6 +60,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         this.findingService = findingService;
         this.workItemClient = workItemClient;
         this.specDocumentPicker = specDocumentPicker;
+        this.codingStandardPicker = codingStandardPicker;
+        this.standardsBranch = standardsBranch;
         this.clock = clock;
         this.sleeper = sleeper;
         this.diffWait = diffWait;
@@ -80,14 +88,15 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         }
         GitlabClient.DiffRefs diffRefs = waitForDiff(projectId, mergeRequestIid);
         if (diffRefs == null) {
-            fail(projectId, mergeRequestIid, DIFF_NOT_READY, null);
+            fail(projectId, mergeRequestIid, DIFF_NOT_READY, null, null);
             return;
         }
         List<FindingEntity> existing = findingService.findByMergeRequest(projectId, mergeRequestIid);
         List<Reviewer.PriorFinding> priorFindings = priorFindings(projectId, mergeRequestIid, existing);
         Reviewer.Spec spec = loadSpec(projectId, attributes, diffRefs.headSha());
+        Reviewer.CodingStandards standards = loadStandards(projectId);
         Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
-                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec));
+                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec, standards));
         List<Long> resolved = findings.resolvedDiscussionIds() == null
                 ? List.of()
                 : findings.resolvedDiscussionIds();
@@ -98,10 +107,10 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 stillOpen(findings.drafts(), existing, priorFindings, resolved));
         resolveKnownDiscussions(projectId, mergeRequestIid, existing, priorFindings, resolved);
         if (failed > 0) {
-            fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回", spec);
+            fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回", spec, standards);
             return;
         }
-        reviewRecordService.recordSuccess(reviewRecord(projectId, mergeRequestIid, null, clock.now(), spec));
+        reviewRecordService.recordSuccess(reviewRecord(projectId, mergeRequestIid, null, clock.now(), spec, standards));
         // 已写回的发现都留下。若之前留过失败讨论，删掉它。
         reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId -> {
             gitlabClient.deleteNote(projectId, mergeRequestIid, noteId);
@@ -246,6 +255,24 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         }
     }
 
+    private Reviewer.CodingStandards loadStandards(long projectId) {
+        String configured = standardsBranch.getBranch();
+        String ref = configured == null || configured.isBlank()
+                ? gitlabClient.defaultBranch(projectId)
+                : configured;
+        java.util.ArrayList<Reviewer.StandardDocument> documents = new java.util.ArrayList<>();
+        java.util.List<String> candidates = gitlabClient.listFiles(projectId, ref).stream()
+                .filter(MergeRequestReviewServiceImpl::standardFile)
+                .toList();
+        for (String path : codingStandardPicker.pick(candidates)) {
+            if (!standardFile(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
+                continue;
+            }
+            documents.add(new Reviewer.StandardDocument(path, gitlabClient.readFile(projectId, path, ref)));
+        }
+        return new Reviewer.CodingStandards(java.util.List.copyOf(documents), true, "编码规范优先");
+    }
+
     private Reviewer.Spec loadSpec(long projectId,
                                    MergeRequestWebhookRequest.ObjectAttributes attributes,
                                    String headSha) {
@@ -282,7 +309,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     }
 
     /** 同一合并请求只留最新一条失败概览讨论：先删旧的，再写新的，并记住新 note id。 */
-    private void fail(long projectId, long mergeRequestIid, String reason, Reviewer.Spec spec) {
+    private void fail(long projectId, long mergeRequestIid, String reason, Reviewer.Spec spec, Reviewer.CodingStandards standards) {
         reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId ->
                 gitlabClient.deleteNote(projectId, mergeRequestIid, noteId));
         Instant occurredAt = clock.now();
@@ -291,7 +318,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 mergeRequestIid,
                 failureBody(reason, occurredAt));
         reviewRecordService.recordFailure(
-                reviewRecord(projectId, mergeRequestIid, reason, occurredAt, spec),
+                reviewRecord(projectId, mergeRequestIid, reason, occurredAt, spec, standards),
                 noteId);
     }
 
@@ -299,7 +326,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                                                     long mergeRequestIid,
                                                     String reason,
                                                     Instant occurredAt,
-                                                    Reviewer.Spec spec) {
+                                                    Reviewer.Spec spec,
+                                                    Reviewer.CodingStandards standards) {
         ReviewRecordEntity record = new ReviewRecordEntity();
         record.setProjectId(projectId);
         record.setMergeRequestIid(mergeRequestIid);
@@ -309,6 +337,11 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             record.setSpecSkipped(spec.skipped());
             record.setSpecDocumentPaths(spec.documents().stream()
                     .map(Reviewer.SpecDocument::path)
+                    .collect(java.util.stream.Collectors.joining("\n")));
+        }
+        if (standards != null) {
+            record.setStandardDocumentPaths(standards.documents().stream()
+                    .map(Reviewer.StandardDocument::path)
                     .collect(java.util.stream.Collectors.joining("\n")));
         }
         return record;
@@ -359,6 +392,31 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         }
         String id = name.substring(0, dash);
         return id.chars().allMatch(Character::isDigit) ? Optional.of(id) : Optional.empty();
+    }
+
+    /** 规范分支上可以当作编码规范的路径。lint 配置、依赖目录和生成目录不算。 */
+    private static boolean standardFile(String path) {
+        if (path == null || path.isBlank() || path.contains("..")) {
+            return false;
+        }
+        String normalized = path.replace('\\', '/');
+        if (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        String[] segments = normalized.split("/");
+        String name = segments[segments.length - 1];
+        if (name.equals(".golangci.yml") || name.equals(".golangci.yaml") || name.equals(".golangci.toml")) {
+            return false;
+        }
+        for (String segment : segments) {
+            if (segment.equals("vendor")
+                    || segment.equals("node_modules")
+                    || segment.equals(".git")
+                    || segment.equals("dist")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 仓库文档里可以进入 spec 的路径。 */

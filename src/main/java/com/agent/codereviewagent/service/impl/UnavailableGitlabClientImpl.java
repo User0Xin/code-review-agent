@@ -50,4 +50,9 @@ public class UnavailableGitlabClientImpl implements GitlabClient {
     public String readFile(long projectId, String path, String ref) {
         throw new IllegalStateException("GitLab 客户端尚未配置");
     }
+
+    @Override
+    public String defaultBranch(long projectId) {
+        throw new IllegalStateException("GitLab 客户端尚未配置");
+    }
 }
