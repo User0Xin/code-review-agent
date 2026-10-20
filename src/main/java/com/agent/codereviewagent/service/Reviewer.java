@@ -12,7 +12,8 @@ public interface Reviewer {
             long mergeRequestIid,
             String headSha,
             List<PriorFinding> priorFindings,
-            Spec spec) {
+            Spec spec,
+            CodingStandards codingStandards) {
     }
 
     /** 这次审查之前已经写回的发现，以及讨论里已有的回复。 */
@@ -59,5 +60,12 @@ public interface Reviewer {
             List<SpecDocument> documents,
             String mergeRequestDescription,
             boolean skipped) {
+    }
+
+    /** 这次审查要对照的编码规范。文档来自规范分支，不是合并请求里的版本。 */
+    record StandardDocument(String path, String content) {
+    }
+
+    record CodingStandards(List<StandardDocument> documents, boolean smellsApply, String precedence) {
     }
 }

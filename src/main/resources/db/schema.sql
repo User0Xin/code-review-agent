@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS review_record (
     reason TEXT,
     occurred_at TEXT NOT NULL,
     spec_skipped INTEGER,
-    spec_document_paths TEXT
+    spec_document_paths TEXT,
+    standard_document_paths TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_record_merge_request

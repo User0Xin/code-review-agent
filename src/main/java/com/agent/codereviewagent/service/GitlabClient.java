@@ -22,6 +22,8 @@ public interface GitlabClient {
 
     String readFile(long projectId, String path, String ref);
 
+    String defaultBranch(long projectId);
+
     record DiffRefs(String headSha) {
     }
 }
