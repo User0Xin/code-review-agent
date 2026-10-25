@@ -38,7 +38,6 @@ export class Store {
   private version = 0;
   private transactionDepth = 0;
   private pendingChange = false;
-  private initializing = true;
 
   constructor(
     path = process.env.REVIEW_DATABASE_PATH || "./data/review.db",
@@ -92,7 +91,6 @@ export class Store {
         }
       }
       initializeDatabase(this.connection);
-      this.initializing = false;
     } catch (error) {
       this.connection.close();
       throw error;
@@ -127,9 +125,6 @@ export class Store {
   }
 
   private notify(): void {
-    if (this.initializing) {
-      return;
-    }
     if (this.transactionDepth > 0) {
       this.pendingChange = true;
       return;

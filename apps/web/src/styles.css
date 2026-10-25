@@ -10,16 +10,10 @@
   --font-title: var(--text-2xl);
   --background: rgb(var(--bg-default));
   --foreground: rgb(var(--content-emphasis));
-  --card: rgb(var(--bg-default));
-  --primary: rgb(var(--bg-inverted));
-  --primary-foreground: rgb(var(--content-inverted));
   --secondary: rgb(var(--bg-subtle));
   --muted: rgb(var(--bg-subtle));
   --muted-foreground: rgb(var(--content-subtle));
-  --accent: rgb(var(--bg-subtle));
-  --destructive: rgb(var(--content-error));
   --border: rgb(var(--border-subtle));
-  --input: rgb(var(--border-default));
   --thread-width: 800px;
 }
 
@@ -283,9 +277,6 @@
   line-height: 1.55;
   letter-spacing: -0.3px;
 }
-.welcome-page h1 span {
-  color: rgb(var(--content-subtle));
-}
 .overview-section {
   margin-top: 30px;
 }
@@ -298,9 +289,6 @@
 }
 .section-heading h2 {
   font-size: var(--font-body);
-}
-.section-heading > span {
-  font-size: var(--font-small);
 }
 .repository-list {
   border-top: 1px solid var(--border);
@@ -940,9 +928,6 @@
   white-space: nowrap;
   font-size: var(--font-small);
 }
-.finding .prose-text {
-  font-size: var(--font-body);
-}
 .finding details {
   font-size: var(--font-small);
   color: rgb(var(--content-subtle));
@@ -1339,9 +1324,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.context-sections section > button {
-  margin: 8px 0 -5px -6px;
-}
 .context-value {
   font-size: var(--font-body);
   color: rgb(var(--content-subtle));
@@ -1358,14 +1340,6 @@
 }
 .context-sections .details-list dd {
   color: rgb(var(--content-subtle));
-}
-.confirm-body {
-  background: rgb(var(--bg-subtle));
-  border: 1px solid var(--border);
-  padding: 16px;
-  border-radius: var(--radius-md);
-  max-height: 300px;
-  overflow: auto;
 }
 .changes-body {
   padding: 20px;
@@ -1486,9 +1460,6 @@
   }
   .project-shortcuts > button {
     margin-right: 0;
-  }
-  .section-heading > span {
-    display: none;
   }
 }
 @media (max-width: 700px) {

@@ -12,7 +12,6 @@ import {
 } from "./platform-values.js";
 import { RepositoryClient, type RepositoryClientOptions } from "./repository-client.js";
 export { newLinePositions } from "../diff.js";
-export { IntegrationError } from "./integration-error.js";
 
 import { IntegrationError } from "./integration-error.js";
 

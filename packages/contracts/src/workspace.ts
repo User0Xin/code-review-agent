@@ -9,10 +9,3 @@ export interface WorkspaceState {
   sessions: Session[];
   jobs: Job[];
 }
-
-export const apiRoutes = {
-  workspace: "/api/workspace",
-  models: "/api/models",
-  projects: "/api/projects",
-  events: "/api/events",
-} as const;

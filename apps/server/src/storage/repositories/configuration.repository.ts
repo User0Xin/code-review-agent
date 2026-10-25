@@ -99,7 +99,7 @@ export class ModelRepository {
   }
 }
 
-export function repositoryKey(provider: Project["provider"], repository: string): string {
+function repositoryKey(provider: Project["provider"], repository: string): string {
   return provider === "github" ? repository.toLowerCase() : repository;
 }
 

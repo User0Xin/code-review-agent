@@ -24,15 +24,6 @@ export class PublicationRepository {
       .map((row) => this.toPublication(row));
   }
 
-  listBySession(sessionId: string): Publication[] {
-    return this.db
-      .select()
-      .from(publications)
-      .where(eq(publications.sessionId, sessionId))
-      .all()
-      .map((row) => this.toPublication(row));
-  }
-
   listByFinding(findingId: string): Publication[] {
     return this.db
       .select({ publication: publications })

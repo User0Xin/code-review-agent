@@ -6,7 +6,7 @@ import type { OnChange, ReviewDatabase } from "../database.js";
 import { prSnapshots, sessions } from "../schema.js";
 
 /** Includes description and coverage in identity, not only the commit SHA. */
-export function snapshotHash(snapshot: PullRequestSnapshot): string {
+function snapshotHash(snapshot: PullRequestSnapshot): string {
   const material: PullRequestSnapshot = {
     number: snapshot.number,
     title: snapshot.title,

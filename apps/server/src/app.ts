@@ -6,10 +6,7 @@ import { ChatGptAuthService } from "./integrations/chatgpt-auth.js";
 import { ErrorFilter } from "./http/error.filter.js";
 import { originMiddleware } from "./http/origin.middleware.js";
 import { Worker } from "./jobs/worker.js";
-import type { AgentPort, RepositoryPort, WebhookPort } from "./ports.js";
 import { Store } from "./store.js";
-import { AGENT, REPOSITORY, WEBHOOKS } from "./tokens.js";
-import { Workflow } from "./workflow/workflow.js";
 
 export async function createApp(options: ApplicationOptions = {}) {
   const environment = readEnvironment();
@@ -22,11 +19,7 @@ export async function createApp(options: ApplicationOptions = {}) {
   const services = {
     store: app.get(Store),
     chatgpt: app.get(ChatGptAuthService),
-    workflow: app.get(Workflow),
     worker: app.get(Worker),
-    repository: app.get<RepositoryPort>(REPOSITORY),
-    agent: app.get<AgentPort>(AGENT),
-    webhooks: app.get<WebhookPort>(WEBHOOKS),
   };
   app.useGlobalFilters(new ErrorFilter(services.store));
   app.use(originMiddleware(environment.port, environment.allowedOrigins));
