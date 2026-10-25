@@ -1,0 +1,242 @@
+/* Dub default theme, unchanged from upstream.
+ * https://github.com/dubinc/dub/blob/main/packages/tailwind-config/themes.css
+ * Source blob: 3789e41787ba3d352826ee590f58ab584b979e51
+ * AGPL-3.0; see THIRD_PARTY_NOTICES.md.
+ */
+:root,
+.light {
+  --bg-default: 255 255 255;
+  --bg-muted: 250 250 250;
+  --bg-subtle: 245 245 245;
+  --bg-emphasis: 229 229 229;
+  --bg-inverted: 23 23 23;
+
+  --bg-info: 219 234 254;
+  --bg-success: 220 252 231;
+  --bg-attention: 255 237 213;
+  --bg-warning: 254 249 195;
+  --bg-error: 254 226 226;
+
+  --border-emphasis: 163 163 163;
+  --border-default: 212 212 212;
+  --border-muted: 245 245 245;
+  --border-subtle: 229 229 229;
+
+  --content-inverted: 255 255 255;
+  --content-muted: 163 163 163;
+  --content-subtle: 115 115 115;
+  --content-default: 64 64 64;
+  --content-emphasis: 23 23 23;
+
+  --content-info: 37 99 235;
+  --content-success: 22 163 74;
+  --content-attention: 234 88 12;
+  --content-warning: 202 138 4;
+  --content-error: 220 38 38;
+}
+
+.dark {
+  --bg-default: 0 0 0;
+  --bg-muted: 23 23 23;
+  --bg-subtle: 38 38 38;
+  --bg-emphasis: 64 64 64;
+  --bg-inverted: 250 250 250;
+
+  --bg-info: 23 37 84;
+  --bg-success: 5 46 22;
+  --bg-attention: 67 20 7;
+  --bg-warning: 66 32 6;
+  --bg-error: 69 10 10;
+
+  --border-muted: 38 38 38;
+  --border-subtle: 64 64 64;
+  --border-default: 82 82 82;
+  --border-emphasis: 115 115 115;
+
+  --content-inverted: 0 0 0;
+  --content-muted: 82 82 82;
+  --content-subtle: 163 163 163;
+  --content-default: 212 212 212;
+  --content-emphasis: 250 250 250;
+
+  --content-info: 147 197 253;
+  --content-success: 134 239 172;
+  --content-attention: 253 186 116;
+  --content-warning: 253 224 71;
+  --content-error: 252 165 165;
+}
+
+/* Tailwind v4 equivalents of Dub's shared Tailwind configuration.
+ * https://github.com/dubinc/dub/blob/main/packages/tailwind-config/tailwind.config.ts
+ * Source blob: 01c3f6ca38df799e29526cc2557ff63373ccb7bd
+ */
+@theme inline {
+  --color-bg-default: rgb(var(--bg-default));
+  --color-bg-muted: rgb(var(--bg-muted));
+  --color-bg-subtle: rgb(var(--bg-subtle));
+  --color-bg-emphasis: rgb(var(--bg-emphasis));
+  --color-bg-inverted: rgb(var(--bg-inverted));
+  --color-bg-info: rgb(var(--bg-info));
+  --color-bg-success: rgb(var(--bg-success));
+  --color-bg-attention: rgb(var(--bg-attention));
+  --color-bg-warning: rgb(var(--bg-warning));
+  --color-bg-error: rgb(var(--bg-error));
+  --color-border-emphasis: rgb(var(--border-emphasis));
+  --color-border-default: rgb(var(--border-default));
+  --color-border-muted: rgb(var(--border-muted));
+  --color-border-subtle: rgb(var(--border-subtle));
+  --color-content-inverted: rgb(var(--content-inverted));
+  --color-content-muted: rgb(var(--content-muted));
+  --color-content-subtle: rgb(var(--content-subtle));
+  --color-content-default: rgb(var(--content-default));
+  --color-content-emphasis: rgb(var(--content-emphasis));
+  --color-content-info: rgb(var(--content-info));
+  --color-content-success: rgb(var(--content-success));
+  --color-content-attention: rgb(var(--content-attention));
+  --color-content-warning: rgb(var(--content-warning));
+  --color-content-error: rgb(var(--content-error));
+  --font-default: var(--font-inter, Inter), system-ui, sans-serif;
+  --font-display: var(--font-satoshi, system-ui), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono, ui-monospace), ui-monospace, monospace;
+}
+
+@theme {
+  --breakpoint-xs: 420px;
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+  --color-neutral-150: #ededed;
+  --color-brown-50: #fdf8f6;
+  --color-brown-100: #f2e8e5;
+  --color-brown-200: #eaddd7;
+  --color-brown-300: #e0cec7;
+  --color-brown-400: #d2bab0;
+  --color-brown-500: #bfa094;
+  --color-brown-600: #a18072;
+  --color-brown-700: #977669;
+  --color-brown-800: #846358;
+  --color-brown-900: #43302b;
+  --drop-shadow-card-hover: 0 2px 4px #222a350d;
+  --animate-scale-in: scale-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-fade-in: fade-in 0.2s ease-out forwards;
+  --animate-scale-in-fade: scale-in-fade 0.2s ease-out forwards;
+  --animate-slide-up-fade: slide-up-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-right-fade: slide-right-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-down-fade: slide-down-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-left-fade: slide-left-fade 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-spinner: spinner 1.2s linear infinite;
+  --animate-blink: blink 1.4s infinite both;
+
+  @keyframes scale-in {
+    from {
+      transform: scale(var(--from-scale, 0.95));
+    }
+    to {
+      transform: scale(var(--to-scale, 1));
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes scale-in-fade {
+    from {
+      transform: scale(0.95);
+      opacity: 0;
+    }
+    to {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  @keyframes slide-up-fade {
+    from {
+      opacity: 0;
+      transform: translateY(var(--offset, 2px));
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes slide-right-fade {
+    from {
+      opacity: 0;
+      transform: translateX(var(--offset, -2px));
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes slide-down-fade {
+    from {
+      opacity: 0;
+      transform: translateY(var(--offset, -2px));
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes slide-left-fade {
+    from {
+      opacity: 0;
+      transform: translateX(var(--offset, 2px));
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes spinner {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 0.2;
+    }
+    20% {
+      opacity: 1;
+    }
+  }
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant radix-state-checked (&[data-state="checked"]);
+@custom-variant radix-state-unchecked (&[data-state="unchecked"]);
+
+@utility scrollbar-hide {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Opacity utilities used by Dub's Tailwind v3 modal and switch markup. */
+@utility bg-opacity-10 {
+  --tw-bg-opacity: 0.1;
+}
+@utility bg-opacity-50 {
+  --tw-bg-opacity: 0.5;
+}
+@utility ring-opacity-75 {
+  --tw-ring-opacity: 0.75;
+}
+@layer utilities {
+  .bg-neutral-100:is(.bg-opacity-10, .bg-opacity-50) {
+    background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
+  }
+  .focus-visible\:ring-blue-500.focus-visible\:ring-opacity-75:focus-visible {
+    --tw-ring-color: rgb(59 130 246 / var(--tw-ring-opacity, 1));
+  }
+}

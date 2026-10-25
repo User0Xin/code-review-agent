@@ -1,0 +1,31 @@
+{
+  "name": "spark-shield",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.5.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "node scripts/start.mjs",
+    "build": "pnpm --filter @review/contracts build && pnpm --filter @review/server build && pnpm --filter @review/web build",
+    "typecheck": "pnpm --filter @review/contracts build && pnpm -r typecheck",
+    "test": "pnpm --filter @review/contracts build && pnpm --filter @review/server test",
+    "check:dependencies": "node scripts/check-dependencies.mjs",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build && pnpm check:dependencies",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"apps/**/*.{ts,tsx,json,css,html}\" \"packages/**/*.{ts,json}\" \"scripts/*.mjs\" \"*.{json,mjs}\" \"docs/**/*.md\" README.md GLOSSARY.md",
+    "format:check": "prettier --check \"apps/**/*.{ts,tsx,json,css,html}\" \"packages/**/*.{ts,json}\" \"scripts/*.mjs\" \"*.{json,mjs}\" \"docs/**/*.md\" README.md GLOSSARY.md"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.0"
+  }
+}
