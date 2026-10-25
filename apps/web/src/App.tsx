@@ -80,8 +80,6 @@ export default function App() {
     setEditProject(p);
     setProjectOpen(true);
   };
-  const activeJobs =
-    data?.jobs.filter((j) => j.status === "running" || j.status === "queued").length || 0;
   const sessionWorkspaceVisible =
     !workspace.isPending && !workspace.error && ui.view === "workspace" && session && project;
   // Overlay navigation never occupies a layout column. Keep its launcher
@@ -144,7 +142,6 @@ export default function App() {
         >
           <Layers3 size={17} />
           <span className="nav-label">工作台</span>
-          <span className="nav-count">{data?.projects.length || 0}</span>
         </Button>
         <Button
           variant="ghost"
@@ -253,7 +250,6 @@ export default function App() {
           >
             <Cpu size={17} />
             <span className="nav-label">模型连接</span>
-            <span className="nav-count">{data?.models.length || 0}</span>
           </Button>
           <Button
             variant="ghost"
@@ -265,7 +261,6 @@ export default function App() {
           >
             <Radio size={17} />
             <span className="nav-label">后台任务</span>
-            {activeJobs > 0 && <span className="nav-count running-count">{activeJobs}</span>}
           </Button>
         </nav>
       </div>

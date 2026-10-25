@@ -129,20 +129,6 @@
   background: rgb(var(--bg-emphasis));
   color: rgb(var(--content-emphasis));
 }
-.nav-count {
-  margin-left: auto;
-  font-size: var(--font-small);
-  border-radius: var(--radius-sm);
-  padding: 0 5px;
-  min-width: 18px;
-  text-align: center;
-  color: rgb(var(--content-subtle));
-  background: transparent;
-}
-.running-count {
-  color: var(--color-green-700);
-  background: rgb(var(--bg-success));
-}
 .sidebar-section-title {
   display: flex;
   justify-content: space-between;
