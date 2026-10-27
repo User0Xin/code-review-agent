@@ -44,6 +44,13 @@ review:
     token: ${GITLAB_TOKEN:}
     project-id: ${GITLAB_PROJECT_ID:0}
     request-timeout: 30s
+  feishu-project:
+    base-url: ${FEISHU_PROJECT_BASE_URL:https://project.feishu.cn}
+    project-key: ${FEISHU_PROJECT_KEY:}
+    plugin-id: ${FEISHU_PROJECT_PLUGIN_ID:}
+    plugin-secret: ${FEISHU_PROJECT_PLUGIN_SECRET:}
+    user-key: ${FEISHU_PROJECT_USER_KEY:}
+    request-timeout: 30s
   diff-wait:
     max-attempts: 3
     interval: 2s

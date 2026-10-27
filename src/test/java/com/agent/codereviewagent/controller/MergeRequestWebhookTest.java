@@ -338,6 +338,35 @@ class MergeRequestWebhookTest {
     }
 
     @Test
+    void specPickerCannotReadInventedPathsOrCodingStandards() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.file("docs/spec.md", "正式 spec");
+        GITLAB.file("docs/coding.md", "当前编码规范");
+        STANDARDS.chosen = List.of("docs/coding.md");
+        PICKER.chosen = List.of("docs/invented.md", "docs/coding.md", "docs/spec.md", "docs/spec.md");
+
+        postWebhook(openPayload());
+
+        assertThat(PICKER.seen).containsExactly("docs/spec.md");
+        assertThat(GITLAB.readRefs).containsExactly("main:docs/coding.md", "abc123:docs/spec.md");
+        assertThat(records.findByMergeRequest(9, 3).get(0).getSpecDocumentPaths()).isEqualTo("docs/spec.md");
+    }
+
+    @Test
+    void aMissingWorkItemStillAllowsRepositorySpec() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.file("docs/spec.md", "正式 spec");
+        PICKER.chosen = List.of("docs/spec.md");
+
+        postWebhook(payload("open", null, "feature/42-missing", "补充说明"));
+
+        assertThat(WORK_ITEMS.reads).isEqualTo(1);
+        assertThat(REVIEWER.lastRequest.spec().workItemText()).isNull();
+        assertThat(REVIEWER.lastRequest.spec().skipped()).isFalse();
+        assertThat(GITLAB.notes).isEmpty();
+    }
+
+    @Test
     void missingWorkItemAndDocumentsSkipSpecWithoutAComment() throws Exception {
         GITLAB.readyWith("abc123");
 

@@ -93,8 +93,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         }
         List<FindingEntity> existing = findingService.findByMergeRequest(projectId, mergeRequestIid);
         List<Reviewer.PriorFinding> priorFindings = priorFindings(projectId, mergeRequestIid, existing);
-        Reviewer.Spec spec = loadSpec(projectId, attributes, diffRefs.headSha());
         Reviewer.CodingStandards standards = loadStandards(projectId);
+        Reviewer.Spec spec = loadSpec(projectId, attributes, diffRefs.headSha(), standards);
         Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
                 projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec, standards));
         List<Long> resolved = findings.resolvedDiscussionIds() == null
@@ -275,16 +275,18 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
 
     private Reviewer.Spec loadSpec(long projectId,
                                    MergeRequestWebhookRequest.ObjectAttributes attributes,
-                                   String headSha) {
+                                   String headSha,
+                                   Reviewer.CodingStandards standards) {
         String workItemText = workItemId(attributes.sourceBranch())
                 .flatMap(workItemClient::readPlainText)
                 .orElse(null);
         java.util.ArrayList<Reviewer.SpecDocument> documents = new java.util.ArrayList<>();
         java.util.List<String> candidates = gitlabClient.listFiles(projectId, headSha).stream()
                 .filter(MergeRequestReviewServiceImpl::specDocument)
+                .filter(path -> standards.documents().stream().noneMatch(document -> document.path().equals(path)))
                 .toList();
         for (String path : specDocumentPicker.pick(candidates)) {
-            if (!specDocument(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
+            if (!candidates.contains(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
                 continue;
             }
             documents.add(new Reviewer.SpecDocument(path, gitlabClient.readFile(projectId, path, headSha)));

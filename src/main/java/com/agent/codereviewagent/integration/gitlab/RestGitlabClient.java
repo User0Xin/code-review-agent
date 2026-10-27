@@ -44,6 +44,30 @@ public class RestGitlabClient implements GitlabClient {
         return Optional.of(new DiffRefs(refs.path("head_sha").asText()));
     }
 
+    /** 以不可变 diff version 固定本次提交，拒绝 GitLab 因大小限制裁掉的差异。 */
+    public String readDiff(long projectId, long mergeRequestIid, String headSha) {
+        String mergeRequest = mergeRequest(projectId, mergeRequestIid);
+        for (JsonNode version : list(mergeRequest + "/versions")) {
+            if (!headSha.equals(version.path("head_commit_sha").asText())) { continue; }
+            JsonNode detail = get(mergeRequest + "/versions/" + version.path("id").asLong());
+            JsonNode diffs = detail.path("diffs");
+            String size = detail.path("real_size").asText();
+            if (!headSha.equals(detail.path("head_commit_sha").asText())
+                    || !"collected".equals(detail.path("state").asText())
+                    || !diffs.isArray() || !size.matches("[0-9]+")
+                    || !size.equals(Integer.toString(diffs.size()))) {
+                throw new IllegalStateException("GitLab diff 版本尚未完整收集或已被截断");
+            }
+            for (JsonNode diff : diffs) {
+                if (diff.path("collapsed").asBoolean() || diff.path("too_large").asBoolean()) {
+                    throw new IllegalStateException("GitLab diff 文件被折叠或超出大小限制");
+                }
+            }
+            return diffs.toString();
+        }
+        throw new IllegalStateException("找不到这次审查提交对应的 GitLab diff 版本");
+    }
+
     @Override
     public long createOverviewDiscussion(long projectId, long mergeRequestIid, String body) {
         return createdNoteId(send("POST", mergeRequest(projectId, mergeRequestIid) + "/discussions",
