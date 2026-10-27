@@ -42,6 +42,8 @@ review:
   diff-wait:
     max-attempts: 3
     interval: 2s
+  standards:
+    branch: ""
 
 mybatis-plus:
   configuration:

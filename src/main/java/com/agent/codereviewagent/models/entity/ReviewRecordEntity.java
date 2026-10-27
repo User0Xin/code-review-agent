@@ -26,4 +26,6 @@ public class ReviewRecordEntity {
     private Boolean specSkipped;
 
     private String specDocumentPaths;
+
+    private String standardDocumentPaths;
 }
