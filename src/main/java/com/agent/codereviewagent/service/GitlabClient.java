@@ -8,6 +8,10 @@ public interface GitlabClient {
 
     Optional<DiffRefs> diffRefs(long projectId, long mergeRequestIid);
 
+    default String readDiff(long projectId, long mergeRequestIid, String headSha) {
+        return "";
+    }
+
     long createOverviewDiscussion(long projectId, long mergeRequestIid, String body);
 
     long createLineDiscussion(long projectId, long mergeRequestIid, String path, Integer newLine, Integer oldLine, String headSha, String body);

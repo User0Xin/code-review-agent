@@ -96,7 +96,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         Reviewer.CodingStandards standards = loadStandards(projectId);
         Reviewer.Spec spec = loadSpec(projectId, attributes, diffRefs.headSha(), standards);
         Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
-                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec, standards));
+                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec, standards,
+                gitlabClient.readDiff(projectId, mergeRequestIid, diffRefs.headSha())));
         List<Long> resolved = findings.resolvedDiscussionIds() == null
                 ? List.of()
                 : findings.resolvedDiscussionIds();
@@ -265,7 +266,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 .filter(MergeRequestReviewServiceImpl::standardFile)
                 .toList();
         for (String path : codingStandardPicker.pick(candidates)) {
-            if (!standardFile(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
+            if (!candidates.contains(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
                 continue;
             }
             documents.add(new Reviewer.StandardDocument(path, gitlabClient.readFile(projectId, path, ref)));
@@ -406,8 +407,9 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             normalized = normalized.substring(1);
         }
         String[] segments = normalized.split("/");
-        String name = segments[segments.length - 1];
-        if (name.equals(".golangci.yml") || name.equals(".golangci.yaml") || name.equals(".golangci.toml")) {
+        String name = segments[segments.length - 1].toLowerCase(java.util.Locale.ROOT);
+        if (!(name.endsWith(".md") || name.endsWith(".mdx") || name.endsWith(".rst")
+                || name.endsWith(".txt") || name.endsWith(".adoc"))) {
             return false;
         }
         for (String segment : segments) {

@@ -171,6 +171,13 @@ class GitlabTransportWebhookTest {
         else if (path.endsWith("/diffs")) {
             response = "[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"@@ -1 +1 @@\\n-old\\n+new\"}]";
         }
+        else if (path.endsWith("/versions")) {
+            response = "[{\"id\":1,\"head_commit_sha\":\"head\"}]";
+        }
+        else if (path.endsWith("/versions/1")) {
+            response = "{\"head_commit_sha\":\"head\",\"state\":\"collected\",\"real_size\":\"1\","
+                    + "\"diffs\":[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"+code\"}]}";
+        }
         else if (path.endsWith("/repository/tree")) { response = "[]"; }
         else if (path.endsWith("/projects/9")) { response = "{\"default_branch\":\"main\"}"; }
         else if (path.endsWith("/discussions") && method.equals("POST")) {

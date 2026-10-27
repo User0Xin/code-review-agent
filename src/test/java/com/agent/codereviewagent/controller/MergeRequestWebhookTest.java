@@ -420,6 +420,38 @@ class MergeRequestWebhookTest {
     }
 
     @Test
+    void eachReviewReloadsStandardsFromTheDefaultBranchWhenNoBranchIsConfigured() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.defaultBranchName = "dev";
+        GITLAB.fileOn("dev", "CONTRIBUTING.md", "旧规范");
+        STANDARDS.chosen = List.of("CONTRIBUTING.md");
+        postWebhook(openPayload());
+        GITLAB.fileOn("dev", "CONTRIBUTING.md", "合并后的新规范");
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(REVIEWER.lastRequest.codingStandards().documents()).singleElement()
+                .extracting(Reviewer.StandardDocument::content).isEqualTo("合并后的新规范");
+        assertThat(GITLAB.readRefs).containsExactly("dev:CONTRIBUTING.md", "dev:CONTRIBUTING.md");
+        assertThat(records.findByMergeRequest(9, 3)).hasSize(2);
+    }
+
+    @Test
+    void standardsMustBeExistingDescriptiveDocuments() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.file("CONTRIBUTING.md", "规范");
+        GITLAB.file("eslint.config.js", "lint 配置");
+        GITLAB.file(".golangci.yml", "lint 配置");
+        GITLAB.file("main.go", "代码");
+        STANDARDS.chosen = List.of("CONTRIBUTING.md", "invented.md", "eslint.config.js", ".golangci.yml", "main.go");
+
+        postWebhook(openPayload());
+
+        assertThat(GITLAB.readRefs).containsExactly("main:CONTRIBUTING.md");
+        assertThat(records.findByMergeRequest(9, 3).get(0).getStandardDocumentPaths()).isEqualTo("CONTRIBUTING.md");
+    }
+
+    @Test
     void missingStandardsStillReviewWithSmellsAndOpenNoRevision() throws Exception {
         GITLAB.readyWith("abc123");
         GITLAB.defaultBranchName = "main";

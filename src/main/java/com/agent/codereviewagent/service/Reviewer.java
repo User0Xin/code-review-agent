@@ -13,7 +13,8 @@ public interface Reviewer {
             String headSha,
             List<PriorFinding> priorFindings,
             Spec spec,
-            CodingStandards codingStandards) {
+            CodingStandards codingStandards,
+            String diff) {
     }
 
     /** 这次审查之前已经写回的发现，以及讨论里已有的回复。 */

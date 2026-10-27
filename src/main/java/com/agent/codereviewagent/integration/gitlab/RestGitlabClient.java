@@ -45,6 +45,7 @@ public class RestGitlabClient implements GitlabClient {
     }
 
     /** 以不可变 diff version 固定本次提交，拒绝 GitLab 因大小限制裁掉的差异。 */
+    @Override
     public String readDiff(long projectId, long mergeRequestIid, String headSha) {
         String mergeRequest = mergeRequest(projectId, mergeRequestIid);
         for (JsonNode version : list(mergeRequest + "/versions")) {
