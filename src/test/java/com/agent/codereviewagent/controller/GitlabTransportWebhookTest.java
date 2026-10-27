@@ -186,7 +186,7 @@ class GitlabTransportWebhookTest {
             }
         }
         else if (path.endsWith("/discussions") && method.equals("GET")) {
-            if (discussionOnSecondPage && exchange.getRequestURI().getQuery().contains("page=1")) {
+            if (discussionOnSecondPage && exchange.getRequestURI().getQuery().endsWith("&page=1")) {
                 exchange.getResponseHeaders().set("X-Next-Page", "2");
                 response = "[]";
             }
