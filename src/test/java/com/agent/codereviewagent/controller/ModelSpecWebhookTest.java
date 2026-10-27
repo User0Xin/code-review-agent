@@ -58,6 +58,7 @@ class ModelSpecWebhookTest {
     void reset() {
         gitlab.files = List.of("docs/design.md", "docs/vendor/hidden.md", "src/private.md");
         gitlab.reads.clear();
+        gitlab.overviews.clear();
         reviewer.request = null;
         jdbc.update("DELETE FROM finding");
         jdbc.update("DELETE FROM review_record");
@@ -84,6 +85,30 @@ class ModelSpecWebhookTest {
                 .contains("docs/design.md").doesNotContain("docs/vendor/hidden.md", "src/private.md");
     }
 
+    @Test
+    void invalidModelJsonLeavesAFailureDiscussionWithoutReadingDocuments() throws Exception {
+        assertSelectionFailure("{\"paths\":[\"docs/design.md\"]} {\"extra\":true}");
+    }
+
+    @Test
+    void nullPathsLeaveAFailureDiscussionWithoutCallingTheReviewer() throws Exception {
+        assertSelectionFailure("{\"paths\":null}");
+    }
+
+    private void assertSelectionFailure(String response) throws Exception {
+        answer(response);
+
+        webhook();
+
+        assertThat(gitlab.reads).isEmpty();
+        assertThat(reviewer.request).isNull();
+        assertThat(gitlab.overviews).singleElement().asString().contains("spec 读取失败");
+        assertThat(records.findByMergeRequest(9, 3)).singleElement().satisfies(record -> {
+            assertThat(record.getOutcome()).isEqualTo("FAILED");
+            assertThat(record.getReason()).isEqualTo("spec 读取失败");
+        });
+    }
+
     private void answer(String text) {
         when(model.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(text)))));
     }
@@ -100,8 +125,12 @@ class ModelSpecWebhookTest {
     static class SpecGitlab implements GitlabClient {
         List<String> files;
         final List<String> reads = new ArrayList<>();
+        final List<String> overviews = new ArrayList<>();
         @Override public Optional<DiffRefs> diffRefs(long project, long iid) { return Optional.of(new DiffRefs("head")); }
-        @Override public long createOverviewDiscussion(long project, long iid, String body) { return 100; }
+        @Override public long createOverviewDiscussion(long project, long iid, String body) {
+            overviews.add(body);
+            return 100;
+        }
         @Override public long createLineDiscussion(long project, long iid, String path, Integer newLine,
                                                   Integer oldLine, String head, String body) { return 101; }
         @Override public void deleteNote(long project, long iid, long note) { }

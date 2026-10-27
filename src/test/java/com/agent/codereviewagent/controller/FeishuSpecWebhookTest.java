@@ -13,6 +13,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -36,8 +37,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -60,6 +63,8 @@ class FeishuSpecWebhookTest {
     private static final HttpServer SERVER = startServer();
     private static volatile boolean missing;
     private static volatile boolean simpleDescription;
+    private static volatile int filterHttpStatus = 200;
+    private static volatile int filterErrorCode;
     private static volatile String description = "工作项要求按部门导出";
 
     @Autowired private MockMvc mvc;
@@ -82,10 +87,13 @@ class FeishuSpecWebhookTest {
         when(GITLAB.diffRefs(9, 3)).thenReturn(Optional.of(new GitlabClient.DiffRefs("head")));
         when(GITLAB.listFiles(anyLong(), anyString())).thenReturn(List.of());
         when(GITLAB.defaultBranch(9)).thenReturn("main");
+        when(GITLAB.createOverviewDiscussion(anyLong(), anyLong(), anyString())).thenReturn(501L);
         REVIEW.set(null);
         RECEIVED.clear();
         missing = false;
         simpleDescription = false;
+        filterHttpStatus = 200;
+        filterErrorCode = 0;
         description = "工作项要求按部门导出";
         jdbc.update("DELETE FROM finding");
         jdbc.update("DELETE FROM review_record");
@@ -149,6 +157,40 @@ class FeishuSpecWebhookTest {
         assertThat(REVIEW.get().spec().skipped()).isFalse();
     }
 
+    @Test
+    void anUnavailableWorkItemApiLeavesAFailureDiscussionInsteadOfSkippingSpec() throws Exception {
+        filterHttpStatus = 503;
+
+        webhook("open");
+
+        assertSpecFailure();
+    }
+
+    @Test
+    void losingTheDedicatedAccountPermissionLeavesAFailureDiscussion() throws Exception {
+        filterErrorCode = 10302;
+
+        webhook("open");
+
+        assertSpecFailure();
+    }
+
+    private void assertSpecFailure() {
+        assertThat(REVIEW.get()).isNull();
+        assertThat(records.findByMergeRequest(9, 3)).singleElement().satisfies(record -> {
+            assertThat(record.getOutcome()).isEqualTo("FAILED");
+            assertThat(record.getReason()).isEqualTo("spec 读取失败");
+            assertThat(record.getSpecSkipped()).isNull();
+        });
+        assertThat(records.findFailureNoteId(9, 3)).contains(501L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM finding", Integer.class)).isZero();
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(GITLAB).createOverviewDiscussion(eq(9L), eq(3L), body.capture());
+        assertThat(body.getValue()).startsWith("审查失败：spec 读取失败。")
+                .doesNotContain("test-secret", "plugin-token", "err_code");
+        verify(GITLAB, never()).createLineDiscussion(anyLong(), anyLong(), anyString(), any(), any(), anyString(), anyString());
+    }
+
     private void webhook(String action) throws Exception {
         mvc.perform(post("/gitlab/webhooks/merge-requests").header("X-Gitlab-Event", "Merge Request Hook")
                         .contentType(MediaType.APPLICATION_JSON).content("""
@@ -191,7 +233,14 @@ class FeishuSpecWebhookTest {
             response = "{\"err_code\":0,\"data\":[{\"type_key\":\"story\"},{\"type_key\":\"custom-type\"}]}";
         }
         else if (path.equals("/open_api/configured-space/work_item/filter")) {
-            if (missing) { response = "{\"err_code\":0,\"data\":[]}"; }
+            if (filterHttpStatus != 200) {
+                status = filterHttpStatus;
+                response = "{\"err_code\":10503,\"err_msg\":\"service unavailable\"}";
+            }
+            else if (filterErrorCode != 0) {
+                response = "{\"err_code\":" + filterErrorCode + ",\"err_msg\":\"user permission lost\"}";
+            }
+            else if (missing) { response = "{\"err_code\":0,\"data\":[]}"; }
             else {
                 var item = JSON.createObjectNode().put("id", 7058321625L);
                 if (simpleDescription) {

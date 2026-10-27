@@ -94,7 +94,14 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         List<FindingEntity> existing = findingService.findByMergeRequest(projectId, mergeRequestIid);
         List<Reviewer.PriorFinding> priorFindings = priorFindings(projectId, mergeRequestIid, existing);
         Reviewer.CodingStandards standards = loadStandards(projectId);
-        Reviewer.Spec spec = loadSpec(projectId, attributes, diffRefs.headSha(), standards);
+        Reviewer.Spec spec;
+        try {
+            spec = loadSpec(projectId, attributes, diffRefs.headSha(), standards);
+        }
+        catch (RuntimeException exception) {
+            fail(projectId, mergeRequestIid, "spec 读取失败", null, standards);
+            return;
+        }
         Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
                 projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec, standards,
                 gitlabClient.readDiff(projectId, mergeRequestIid, diffRefs.headSha())));

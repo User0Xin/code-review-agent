@@ -392,6 +392,24 @@ class MergeRequestWebhookTest {
     }
 
     @Test
+    void aSelectedSpecDocumentReadFailureLeavesAFailureDiscussion() throws Exception {
+        GITLAB.readyWith("abc123");
+        GITLAB.file("docs/spec.md", "正式 spec");
+        GITLAB.failedReadPath = "docs/spec.md";
+        PICKER.chosen = List.of("docs/spec.md");
+
+        postWebhook(openPayload());
+
+        assertThat(REVIEWER.calls).isZero();
+        assertThat(GITLAB.notes).singleElement().extracting(FakeGitlabImpl.Note::body)
+                .isEqualTo("审查失败：spec 读取失败。2026-10-15T09:00:00Z");
+        assertThat(records.findByMergeRequest(9, 3)).singleElement().satisfies(record -> {
+            assertThat(record.getOutcome()).isEqualTo("FAILED");
+            assertThat(record.getSpecSkipped()).isNull();
+        });
+    }
+
+    @Test
     void missingWorkItemAndDocumentsSkipSpecWithoutAComment() throws Exception {
         GITLAB.readyWith("abc123");
 
@@ -594,6 +612,7 @@ class MergeRequestWebhookTest {
         private final java.util.Map<String, java.util.Map<String, String>> filesByRef = new java.util.LinkedHashMap<>();
         private final List<String> readRefs = new ArrayList<>();
         private String defaultBranchName = "main";
+        private String failedReadPath;
 
         void readyWith(String headSha) {
             diff = Optional.of(new DiffRefs(headSha));
@@ -612,6 +631,7 @@ class MergeRequestWebhookTest {
             filesByRef.clear();
             readRefs.clear();
             defaultBranchName = "main";
+            failedReadPath = null;
             noteIds.set(0);
         }
 
@@ -687,6 +707,7 @@ class MergeRequestWebhookTest {
 
         @Override
         public String readFile(long projectId, String path, String ref) {
+            if (path.equals(failedReadPath)) { throw new IllegalStateException("读取文档失败"); }
             readRefs.add(ref + ":" + path);
             if (filesByRef.containsKey(ref) && filesByRef.get(ref).containsKey(path)) {
                 return filesByRef.get(ref).get(path);
