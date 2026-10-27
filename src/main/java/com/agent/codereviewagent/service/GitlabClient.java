@@ -12,9 +12,18 @@ public interface GitlabClient {
         return "";
     }
 
+    default String readDiff(long projectId, long mergeRequestIid, DiffRefs refs) {
+        return readDiff(projectId, mergeRequestIid, refs.headSha());
+    }
+
     long createOverviewDiscussion(long projectId, long mergeRequestIid, String body);
 
     long createLineDiscussion(long projectId, long mergeRequestIid, String path, Integer newLine, Integer oldLine, String headSha, String body);
+
+    default long createLineDiscussion(long projectId, long mergeRequestIid, String path, Integer newLine,
+                                      Integer oldLine, DiffRefs refs, String body) {
+        return createLineDiscussion(projectId, mergeRequestIid, path, newLine, oldLine, refs.headSha(), body);
+    }
 
     void deleteNote(long projectId, long mergeRequestIid, long noteId);
 
@@ -34,6 +43,7 @@ public interface GitlabClient {
 
     default String branchHead(long projectId, String branch) { return branch; }
 
-    record DiffRefs(String headSha) {
+    record DiffRefs(String headSha, String baseSha, String startSha) {
+        public DiffRefs(String headSha) { this(headSha, null, null); }
     }
 }

@@ -8,7 +8,12 @@ CREATE TABLE IF NOT EXISTS review_record (
     spec_skipped INTEGER,
     spec_document_paths TEXT,
     standard_document_paths TEXT,
-    summary_error TEXT
+    summary_error TEXT,
+    trigger_reason TEXT,
+    head_sha TEXT,
+    failure_note_id INTEGER,
+    note_error TEXT,
+    failure_detail TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_record_merge_request
@@ -63,5 +68,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_revision
 CREATE TABLE IF NOT EXISTS revision_checkpoint (
     project_id INTEGER PRIMARY KEY,
     last_finding_id INTEGER NOT NULL DEFAULT 0,
-    retry_pending INTEGER NOT NULL DEFAULT 0
+    retry_pending INTEGER NOT NULL DEFAULT 0,
+    retry_finding_ids TEXT
 );

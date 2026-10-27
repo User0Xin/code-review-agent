@@ -9,6 +9,7 @@ import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.config.StandardsBranchProperties;
+import com.agent.codereviewagent.config.GitlabProperties;
 import com.agent.codereviewagent.service.CodingStandardPicker;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
 import com.agent.codereviewagent.service.WorkItemClient;
@@ -16,6 +17,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -76,6 +79,9 @@ class MergeRequestWebhookTest {
     @Autowired
     private StandardsBranchProperties standardsBranch;
 
+    @Autowired
+    private GitlabProperties gitlabProperties;
+
     @BeforeEach
     void reset() {
         GITLAB.reset();
@@ -84,10 +90,13 @@ class MergeRequestWebhookTest {
         REVIEWER.resolvedDiscussionIds = List.of();
         REVIEWER.declinedDiscussionIds = List.of();
         REVIEWER.lastRequest = null;
+        REVIEWER.failure = null;
+        REVIEWER.afterReview = null;
         WORK_ITEMS.reset();
         PICKER.reset();
         STANDARDS.reset();
         standardsBranch.setBranch("");
+        gitlabProperties.setProjectId(0);
         GITLAB.clearFiles();
         jdbcTemplate.update("DELETE FROM review_failure_note");
         jdbcTemplate.update("DELETE FROM review_record");
@@ -106,6 +115,11 @@ class MergeRequestWebhookTest {
                 .isEqualTo("SUCCESS");
         assertThat(REVIEWER.calls).isEqualTo(1);
         assertThat(GITLAB.notes).isEmpty();
+        assertThat(records.findByMergeRequest(9, 3).get(0)).satisfies(record -> {
+            assertThat(record.getTrigger()).isEqualTo("open");
+            assertThat(record.getHeadSha()).isEqualTo("abc123");
+            assertThat(record.getFailureNoteId()).isNull();
+        });
     }
 
     @Test
@@ -116,6 +130,10 @@ class MergeRequestWebhookTest {
 
         assertThat(records.findByMergeRequest(9, 3)).hasSize(1);
         assertThat(REVIEWER.calls).isEqualTo(1);
+        assertThat(records.findByMergeRequest(9, 3).get(0)).satisfies(record -> {
+            assertThat(record.getTrigger()).isEqualTo("update");
+            assertThat(record.getHeadSha()).isEqualTo("def456");
+        });
     }
 
     @Test
@@ -125,6 +143,57 @@ class MergeRequestWebhookTest {
         assertThat(records.findByMergeRequest(9, 3)).isEmpty();
         assertThat(GITLAB.diffReads).isZero();
         assertThat(REVIEWER.calls).isZero();
+    }
+
+    @Test
+    void webhooksForAnotherConfiguredProjectOrNonPositiveIdsAreIgnored() throws Exception {
+        GITLAB.readyWith("abc123");
+        gitlabProperties.setProjectId(9);
+        ObjectNode otherProject = openPayload();
+        ((ObjectNode) otherProject.get("project")).put("id", 10);
+        postWebhook(otherProject);
+        gitlabProperties.setProjectId(0);
+        for (long[] ids : List.of(new long[]{0, 3}, new long[]{-1, 3}, new long[]{9, 0}, new long[]{9, -1})) {
+            ObjectNode invalid = openPayload();
+            ((ObjectNode) invalid.get("project")).put("id", ids[0]);
+            ((ObjectNode) invalid.get("object_attributes")).put("iid", ids[1]);
+            postWebhook(invalid);
+        }
+
+        assertThat(GITLAB.diffReads).isZero();
+        assertThat(REVIEWER.calls).isZero();
+        assertThat(GITLAB.notes).isEmpty();
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM review_record", Integer.class)).isZero();
+    }
+
+    @Test
+    void aDiffThatBecomesReadyDuringTheWaitIsReviewed() throws Exception {
+        GITLAB.readyOnRead(2, "abc123");
+
+        postWebhook(openPayload());
+
+        assertThat(GITLAB.diffReads).isGreaterThanOrEqualTo(2);
+        assertThat(REVIEWER.calls).isEqualTo(1);
+        assertThat(records.findByMergeRequest(9, 3)).singleElement()
+                .extracting(ReviewRecordEntity::getOutcome).isEqualTo("SUCCESS");
+        assertThat(GITLAB.notes).isEmpty();
+    }
+
+    @Test
+    void waitingForDiffIgnoresAStaleVersionUntilTheWebhookCommitBecomesReady() throws Exception {
+        GITLAB.readyWith("stale-head");
+        GITLAB.readyOnRead(2, "expected-head");
+        ObjectNode body = openPayload();
+        ((ObjectNode) body.get("object_attributes").get("last_commit")).put("id", "expected-head");
+
+        postWebhook(body);
+
+        assertThat(REVIEWER.calls).isEqualTo(1);
+        assertThat(REVIEWER.lastRequest.headSha()).isEqualTo("expected-head");
+        assertThat(records.findByMergeRequest(9, 3)).singleElement().satisfies(record -> {
+            assertThat(record.getOutcome()).isEqualTo("SUCCESS");
+            assertThat(record.getHeadSha()).isEqualTo("expected-head");
+        });
     }
 
     @Test
@@ -139,6 +208,78 @@ class MergeRequestWebhookTest {
                 .singleElement()
                 .extracting(ReviewRecordEntity::getOutcome)
                 .isEqualTo("FAILED");
+        assertThat(records.findByMergeRequest(9, 3).get(0)).satisfies(record -> {
+            assertThat(record.getTrigger()).isEqualTo("open");
+            assertThat(record.getHeadSha()).isEqualTo("abc123");
+            assertThat(record.getFailureNoteId()).isEqualTo(GITLAB.notes.get(0).id);
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"diffRefs", "standards", "readDiff", "reviewer"})
+    void failuresAtEachReviewStageLeaveOneFailedRecordAndASafeDiscussion(String stage) throws Exception {
+        GITLAB.readyWith("abc123");
+        RuntimeException failure = new IllegalStateException("SENSITIVE_MODEL_REPLY_AND_PROMPT");
+        switch (stage) {
+            case "diffRefs" -> GITLAB.diffFailure = failure;
+            case "standards" -> {
+                GITLAB.file("CONTRIBUTING.md", "当前规范");
+                GITLAB.failedReadPath = "CONTRIBUTING.md";
+                STANDARDS.chosen = List.of("CONTRIBUTING.md");
+            }
+            case "readDiff" -> GITLAB.readDiffFailure = failure;
+            case "reviewer" -> REVIEWER.failure = failure;
+            default -> throw new AssertionError(stage);
+        }
+
+        postWebhook(openPayload());
+
+        assertThat(records.findByMergeRequest(9, 3)).singleElement().satisfies(record -> {
+            assertThat(record.getOutcome()).isEqualTo("FAILED");
+            assertThat(record.getTrigger()).isEqualTo("open");
+            assertThat(record.getHeadSha()).isEqualTo("abc123");
+            assertThat(record.getReason()).isNotBlank().doesNotContain("SENSITIVE_MODEL_REPLY_AND_PROMPT");
+            assertThat(record.getFailureDetail()).isNotBlank();
+            if (stage.equals("reviewer")) {
+                assertThat(record.getFailureDetail()).doesNotContain("SENSITIVE_MODEL_REPLY_AND_PROMPT");
+            }
+        });
+        assertThat(findings.findByMergeRequest(9, 3)).isEmpty();
+        assertThat(GITLAB.notes).singleElement().satisfies(note -> {
+            assertThat(note.kind).isEqualTo("overview");
+            assertThat(note.body).startsWith("审查失败：").contains(NOW.toString())
+                    .doesNotContain("SENSITIVE_MODEL_REPLY_AND_PROMPT");
+        });
+    }
+
+    @Test
+    void failureNotificationCreationFailingStillPersistsTheOriginalFailure() throws Exception {
+        GITLAB.throwOnCreateNumber = 1;
+
+        postWebhook(openPayload());
+
+        assertThat(records.findByMergeRequest(9, 3)).singleElement().satisfies(record -> {
+            assertThat(record.getOutcome()).isEqualTo("FAILED");
+            assertThat(record.getReason()).contains("diff 尚未就绪");
+            assertThat(record.getFailureNoteId()).isNull();
+            assertThat(record.getNoteError()).isNotBlank();
+        });
+        assertThat(records.findFailureNoteId(9, 3)).isEmpty();
+        assertThat(GITLAB.notes).isEmpty();
+    }
+
+    @Test
+    void failureNotificationReplacementFailingKeepsTheOldDiscussionAndBothFailureRecords() throws Exception {
+        postWebhook(openPayload());
+        GITLAB.failDelete = true;
+
+        postWebhook(openPayload());
+
+        assertThat(records.findByMergeRequest(9, 3)).hasSize(2)
+                .extracting(ReviewRecordEntity::getOutcome).containsExactly("FAILED", "FAILED");
+        assertThat(records.findByMergeRequest(9, 3).get(1).getNoteError()).isNotBlank();
+        assertThat(records.findFailureNoteId(9, 3)).contains(1L);
+        assertThat(GITLAB.notes).singleElement().extracting(FakeGitlabImpl.Note::id).isEqualTo(1L);
     }
 
     @Test
@@ -164,6 +305,50 @@ class MergeRequestWebhookTest {
                 .containsExactly(
                         "FAILED",
                         "SUCCESS");
+    }
+
+    @Test
+    void failedCleanupKeepsTheReviewSuccessfulAndRetriesTheOldFailureDiscussionLater() throws Exception {
+        postWebhook(openPayload());
+        GITLAB.readyWith("abc123");
+        GITLAB.failDelete = true;
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(records.findByMergeRequest(9, 3)).hasSize(2)
+                .extracting(ReviewRecordEntity::getOutcome).containsExactly("FAILED", "SUCCESS");
+        assertThat(records.findByMergeRequest(9, 3).get(1).getNoteError()).isNotBlank();
+        assertThat(records.findFailureNoteId(9, 3)).contains(1L);
+        assertThat(GITLAB.notes).hasSize(1);
+        GITLAB.failDelete = false;
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(records.findByMergeRequest(9, 3)).hasSize(3)
+                .extracting(ReviewRecordEntity::getOutcome).containsExactly("FAILED", "SUCCESS", "SUCCESS");
+        assertThat(records.findFailureNoteId(9, 3)).isEmpty();
+        assertThat(GITLAB.notes).isEmpty();
+    }
+
+    @Test
+    void aNewHeadWhileTheModelRunsPreventsAllStaleLineAndOverviewDraftsFromBeingPosted() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "旧提交的行问题。"),
+                new Reviewer.CommentDraft(null, null, null, "缺陷", null, "旧提交的概览问题。")));
+        REVIEWER.afterReview = () -> GITLAB.readyWith("new-head");
+
+        postWebhook(openPayload());
+
+        assertThat(findings.findByMergeRequest(9, 3)).isEmpty();
+        assertThat(GITLAB.notes).singleElement().satisfies(note -> {
+            assertThat(note.kind).isEqualTo("overview");
+            assertThat(note.body).startsWith("审查失败：").doesNotContain("旧提交的行问题", "旧提交的概览问题");
+        });
+        assertThat(records.findByMergeRequest(9, 3)).singleElement().satisfies(record -> {
+            assertThat(record.getOutcome()).isEqualTo("FAILED");
+            assertThat(record.getHeadSha()).isEqualTo("abc123");
+        });
     }
 
     @Test
@@ -537,7 +722,7 @@ class MergeRequestWebhookTest {
         ObjectNode attributes = root.putObject("object_attributes");
         attributes.put("action", action);
         attributes.put("iid", 3);
-        attributes.putObject("last_commit").put("id", "abc123");
+        attributes.putObject("last_commit").put("id", GITLAB.diff.map(GitlabClient.DiffRefs::headSha).orElse("abc123"));
         if (oldrev != null) {
             attributes.put("oldrev", oldrev);
         }
@@ -606,6 +791,11 @@ class MergeRequestWebhookTest {
         private int diffReads;
         private int creates;
         private int throwOnCreateNumber;
+        private RuntimeException diffFailure;
+        private RuntimeException readDiffFailure;
+        private boolean failDelete;
+        private int diffReadyOnRead;
+        private String deferredHead;
         private final Map<Long, List<String>> replies = new HashMap<>();
         private final List<Long> resolved = new ArrayList<>();
         private final java.util.LinkedHashMap<String, String> files = new java.util.LinkedHashMap<>();
@@ -618,6 +808,11 @@ class MergeRequestWebhookTest {
             diff = Optional.of(new DiffRefs(headSha));
         }
 
+        void readyOnRead(int readNumber, String headSha) {
+            diffReadyOnRead = readNumber;
+            deferredHead = headSha;
+        }
+
         void reset() {
             notes.clear();
             deletedNoteIds.clear();
@@ -625,6 +820,11 @@ class MergeRequestWebhookTest {
             diffReads = 0;
             creates = 0;
             throwOnCreateNumber = 0;
+            diffFailure = null;
+            readDiffFailure = null;
+            failDelete = false;
+            diffReadyOnRead = 0;
+            deferredHead = null;
             replies.clear();
             resolved.clear();
             files.clear();
@@ -656,7 +856,15 @@ class MergeRequestWebhookTest {
         @Override
         public Optional<DiffRefs> diffRefs(long projectId, long mergeRequestIid) {
             diffReads++;
+            if (diffFailure != null) { throw diffFailure; }
+            if (diffReadyOnRead > 0 && diffReads >= diffReadyOnRead) { readyWith(deferredHead); }
             return diff;
+        }
+
+        @Override
+        public String readDiff(long projectId, long mergeRequestIid, String headSha) {
+            if (readDiffFailure != null) { throw readDiffFailure; }
+            return "本次提交的 diff";
         }
 
         @Override
@@ -722,6 +930,7 @@ class MergeRequestWebhookTest {
 
         @Override
         public void deleteNote(long projectId, long mergeRequestIid, long noteId) {
+            if (failDelete) { throw new IllegalStateException("删除讨论失败"); }
             deletedNoteIds.add(noteId);
             notes.removeIf(note -> note.id == noteId);
         }
@@ -737,11 +946,15 @@ class MergeRequestWebhookTest {
         private List<Long> resolvedDiscussionIds = List.of();
         private List<Long> declinedDiscussionIds = List.of();
         private ReviewRequest lastRequest;
+        private RuntimeException failure;
+        private Runnable afterReview;
 
         @Override
         public ReviewFindings review(ReviewRequest request) {
             calls++;
             lastRequest = request;
+            if (failure != null) { throw failure; }
+            if (afterReview != null) { afterReview.run(); }
             return new ReviewFindings(findings.drafts(), resolvedDiscussionIds, declinedDiscussionIds);
         }
     }

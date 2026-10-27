@@ -49,6 +49,12 @@ class GitlabTransportWebhookTest {
     private static volatile boolean failSecond;
     private static volatile String reply = "";
     private static volatile boolean discussionOnSecondPage;
+    private static volatile boolean missingPaginationHeader;
+    private static volatile int rejectPositionStatus;
+    private static volatile boolean emptyDiffVersion;
+    private static volatile boolean changeBaseAfterModel;
+    private static volatile boolean includeOtherVersionFirst;
+    private static volatile String currentBase = "base";
     private static volatile boolean firstDiscussionResolved;
     private static volatile boolean includeOwnAndSystemReplies;
     private static volatile Reviewer.ReviewRequest lastReview;
@@ -74,6 +80,12 @@ class GitlabTransportWebhookTest {
         failSecond = false;
         reply = "";
         discussionOnSecondPage = false;
+        missingPaginationHeader = false;
+        rejectPositionStatus = 0;
+        emptyDiffVersion = false;
+        changeBaseAfterModel = false;
+        includeOtherVersionFirst = false;
+        currentBase = "base";
         firstDiscussionResolved = false;
         includeOwnAndSystemReplies = false;
         lastReview = null;
@@ -188,6 +200,87 @@ class GitlabTransportWebhookTest {
         assertThat(RECEIVED).noneSatisfy(received -> assertThat(received.method()).isEqualTo("DELETE"));
     }
 
+    @Test
+    void aRejectedDiffPositionFallsBackToOneOverviewDiscussion() throws Exception {
+        rejectPositionStatus = 422;
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 12, null, "缺陷", null, "错误没有处理。"));
+
+        webhook("open");
+
+        assertThat(POSTED).hasSize(2);
+        assertThat(POSTED.get(0).has("position")).isTrue();
+        assertThat(POSTED.get(1).has("position")).isFalse();
+        assertThat(POSTED.get(1).path("body").asText()).isEqualTo("错误没有处理。");
+        assertThat(findings.findByMergeRequest(9, 3)).singleElement().satisfies(finding ->
+                assertThat(finding.getDiscussionId()).isEqualTo(102L));
+    }
+
+    @Test
+    void aServerFailureDoesNotPublishTheFindingAgainAsAnOverview() throws Exception {
+        rejectPositionStatus = 503;
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 12, null, "缺陷", null, "错误没有处理。"));
+
+        webhook("open");
+
+        assertThat(POSTED).hasSize(2);
+        assertThat(POSTED.get(1).path("body").asText()).startsWith("审查失败：有 1 条没能写回");
+        assertThat(findings.findByMergeRequest(9, 3)).isEmpty();
+    }
+
+    @Test
+    void aFullPageWithoutPaginationHeadersStillReadsTheNextDiscussionPage() throws Exception {
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 12, null, "缺陷", null, "错误没有处理。"));
+        webhook("open");
+        drafts = List.of();
+        discussionOnSecondPage = true;
+        missingPaginationHeader = true;
+        reply = "回复位于第二页讨论。";
+
+        webhook("update");
+
+        assertThat(lastReview.priorFindings()).singleElement().satisfies(prior ->
+                assertThat(prior.replies()).containsExactly("回复位于第二页讨论。"));
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+        assertThat(POSTED).hasSize(1);
+    }
+
+    @Test
+    void aCompleteEmptyDiffVersionFinishesSuccessfullyWithoutFindings() throws Exception {
+        emptyDiffVersion = true;
+
+        webhook("open");
+
+        assertThat(lastReview.diff()).isEqualTo("[]");
+        assertThat(POSTED).isEmpty();
+        assertThat(findings.findByMergeRequest(9, 3)).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT outcome FROM review_record WHERE project_id = 9 AND merge_request_iid = 3",
+                String.class)).isEqualTo("SUCCESS");
+    }
+
+    @Test
+    void aTargetBaseChangeAfterTheModelPreventsAllFindingWrites() throws Exception {
+        changeBaseAfterModel = true;
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 12, null, "缺陷", null, "错误没有处理。"));
+
+        webhook("open");
+
+        assertThat(POSTED).singleElement().satisfies(posted -> {
+            assertThat(posted.has("position")).isFalse();
+            assertThat(posted.path("body").asText()).contains("审查期间提交已变化");
+        });
+        assertThat(findings.findByMergeRequest(9, 3)).isEmpty();
+    }
+
+    @Test
+    void theDiffVersionMustMatchBaseAndStartAsWellAsHead() throws Exception {
+        includeOtherVersionFirst = true;
+
+        webhook("open");
+
+        assertThat(lastReview.diff()).contains("+code").doesNotContain("wrong-version");
+        assertThat(RECEIVED).noneSatisfy(received -> assertThat(received.path()).endsWith("/versions/2"));
+    }
+
     private void webhook(String action) throws Exception {
         String body = """
                 {"object_kind":"merge_request","project":{"id":9},"object_attributes":
@@ -217,18 +310,28 @@ class GitlabTransportWebhookTest {
         String response;
         int status = 200;
         if (path.endsWith("/merge_requests/3")) {
-            response = "{\"diff_refs\":{\"head_sha\":\"head\",\"base_sha\":\"base\",\"start_sha\":\"start\"}}";
+            response = "{\"diff_refs\":{\"head_sha\":\"head\",\"base_sha\":\"" + currentBase
+                    + "\",\"start_sha\":\"start\"}}";
         }
         else if (path.equals("/api/v4/user")) { response = "{\"id\":42,\"username\":\"review-service\"}"; }
         else if (path.endsWith("/diffs")) {
             response = "[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"@@ -1 +1 @@\\n-old\\n+new\"}]";
         }
         else if (path.endsWith("/versions")) {
-            response = "[{\"id\":1,\"head_commit_sha\":\"head\"}]";
+            String current = "{\"id\":1,\"head_commit_sha\":\"head\",\"base_commit_sha\":\"base\",\"start_commit_sha\":\"start\"}";
+            response = includeOtherVersionFirst
+                    ? "[{\"id\":2,\"head_commit_sha\":\"head\",\"base_commit_sha\":\"old-base\",\"start_commit_sha\":\"old-start\"}," + current + "]"
+                    : "[" + current + "]";
         }
         else if (path.endsWith("/versions/1")) {
-            response = "{\"head_commit_sha\":\"head\",\"state\":\"collected\",\"real_size\":\"1\","
-                    + "\"diffs\":[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"+code\"}]}";
+            response = emptyDiffVersion
+                    ? "{\"head_commit_sha\":\"head\",\"base_commit_sha\":\"base\",\"start_commit_sha\":\"start\",\"state\":\"without_files\",\"real_size\":\"0\",\"diffs\":[]}"
+                    : "{\"head_commit_sha\":\"head\",\"base_commit_sha\":\"base\",\"start_commit_sha\":\"start\",\"state\":\"collected\",\"real_size\":\"1\","
+                      + "\"diffs\":[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"+code\"}]}";
+        }
+        else if (path.endsWith("/versions/2")) {
+            response = "{\"head_commit_sha\":\"head\",\"base_commit_sha\":\"old-base\",\"start_commit_sha\":\"old-start\",\"state\":\"collected\",\"real_size\":\"1\","
+                    + "\"diffs\":[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"+wrong-version\"}]}";
         }
         else if (path.endsWith("/repository/tree")) { response = "[]"; }
         else if (path.endsWith("/repository/branches/main")) { response = "{\"commit\":{\"id\":\"main\"}}"; }
@@ -236,7 +339,11 @@ class GitlabTransportWebhookTest {
         else if (path.endsWith("/discussions") && method.equals("POST")) {
             POSTED.add(body);
             int number = POSTED.size();
-            if (failSecond && number == 2) {
+            if (rejectPositionStatus > 0 && body.has("position")) {
+                status = rejectPositionStatus;
+                response = "{\"message\":\"position line_code is invalid\"}";
+            }
+            else if (failSecond && number == 2) {
                 status = 503;
                 response = "{\"message\":\"unavailable\"}";
             }
@@ -248,8 +355,18 @@ class GitlabTransportWebhookTest {
         }
         else if (path.endsWith("/discussions") && method.equals("GET")) {
             if (discussionOnSecondPage && exchange.getRequestURI().getQuery().endsWith("&page=1")) {
-                exchange.getResponseHeaders().set("X-Next-Page", "2");
-                response = "[]";
+                if (missingPaginationHeader) {
+                    var discussions = JSON.createArrayNode();
+                    for (int index = 0; index < 100; index++) {
+                        var item = discussions.addObject().put("id", "unrelated-" + index);
+                        item.putArray("notes").addObject().put("id", 1000 + index).put("body", "其他讨论");
+                    }
+                    response = discussions.toString();
+                }
+                else {
+                    exchange.getResponseHeaders().set("X-Next-Page", "2");
+                    response = "[]";
+                }
             }
             else {
                 var discussion = JSON.createObjectNode().put("id", "thread-101");
@@ -289,6 +406,7 @@ class GitlabTransportWebhookTest {
         @Bean @Primary Reviewer transportReviewer() {
             return request -> {
                 lastReview = request;
+                if (changeBaseAfterModel) { currentBase = "changed-base"; }
                 return new Reviewer.ReviewFindings(drafts, resolved);
             };
         }

@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -177,6 +178,37 @@ class RevisionLifecycleWebhookTest {
         assertThat(revisionId("持续有效的发现")).isNotNull();
         assertThat(revisionId("补足门槛的有效发现")).isNotNull();
         assertThat(unconsumedCount()).isEqualTo(1);
+        assertNoFailureNotification();
+    }
+
+    @Test
+    void aPartiallySubmittedBatchRetriesItsRemainingFindingEvenBelowTheNewFindingThreshold() throws Exception {
+        SUMMARY.answer = candidates -> new RevisionSummarizer.Summary(List.of(
+                new RevisionSummarizer.Replacement("资源关闭", PATH, "旧规则", "旧规则\n应及时关闭资源。",
+                        List.of(candidates.get(0).getId()), "第一个片段可以提交。"),
+                new RevisionSummarizer.Replacement("资源关闭", PATH, "不存在的原文", "新的规则文本",
+                        List.of(candidates.get(1).getId()), "第二个片段原文不匹配，留待下次。")));
+
+        publish("已经提交的片段发现", "待重试片段发现");
+
+        Long firstRevision = revisionId("已经提交的片段发现");
+        assertThat(firstRevision).isNotNull();
+        assertThat(revisionId("待重试片段发现")).isNull();
+        assertThat(unconsumedCount()).isEqualTo(1);
+        assertThat(REVISIONS.created).hasSize(1);
+        REVISIONS.states.put(REVISIONS.created.get(0).iid(), "closed");
+        SUMMARY.answer = FakeSummarizer::defaultSummary;
+
+        publish();
+
+        assertThat(SUMMARY.calls).isEqualTo(2);
+        assertThat(SUMMARY.batches).hasSize(2);
+        assertThat(SUMMARY.batches.get(1)).extracting(FindingEntity::getCommentBody)
+                .containsExactly("待重试片段发现");
+        assertThat(REVISIONS.created).hasSize(2);
+        assertThat(revisionId("已经提交的片段发现")).isEqualTo(firstRevision);
+        assertThat(revisionId("待重试片段发现")).isNotNull().isNotEqualTo(firstRevision);
+        assertThat(unconsumedCount()).isZero();
         assertNoFailureNotification();
     }
 
@@ -337,11 +369,18 @@ class RevisionLifecycleWebhookTest {
         int calls;
         int failuresRemaining;
         final List<List<FindingEntity>> batches = new ArrayList<>();
-        void reset() { calls = 0; failuresRemaining = 0; batches.clear(); }
+        Function<List<FindingEntity>, Summary> answer;
+        void reset() {
+            calls = 0; failuresRemaining = 0; batches.clear();
+            answer = FakeSummarizer::defaultSummary;
+        }
         @Override public Summary summarize(List<FindingEntity> findings, List<Reviewer.StandardDocument> standards) {
             calls++;
             if (failuresRemaining-- > 0) { throw new IllegalStateException("总结模型暂时失败"); }
             batches.add(List.copyOf(findings));
+            return answer.apply(findings);
+        }
+        private static Summary defaultSummary(List<FindingEntity> findings) {
             return new Summary(List.of(new Replacement("资源关闭", PATH, "旧规则", "旧规则\n应及时关闭资源。",
                     findings.stream().map(FindingEntity::getId).toList(), "依据反复出现的发现补充资源关闭要求。")));
         }

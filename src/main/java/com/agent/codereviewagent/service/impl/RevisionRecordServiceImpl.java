@@ -54,6 +54,10 @@ public class RevisionRecordServiceImpl implements RevisionRecordService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public void retryBasis(long projectId, String findingIds) { checkpoints.retryBasis(projectId, findingIds); }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void prepare(CodingStandardRevisionEntity revision) {
         revisions.insert(revision);
     }

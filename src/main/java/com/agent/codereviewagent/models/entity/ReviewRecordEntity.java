@@ -3,6 +3,7 @@ package com.agent.codereviewagent.models.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
 import lombok.Data;
 
 /** SQLite 中的一次审查结果。时间按 ISO-8601 UTC 文本保存。 */
@@ -30,4 +31,10 @@ public class ReviewRecordEntity {
     private String standardDocumentPaths;
 
     private String summaryError;
+    @TableField("trigger_reason")
+    private String trigger;
+    private String headSha;
+    private Long failureNoteId;
+    private String noteError;
+    private String failureDetail;
 }

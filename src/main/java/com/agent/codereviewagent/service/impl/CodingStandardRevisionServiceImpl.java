@@ -3,7 +3,16 @@ package com.agent.codereviewagent.service.impl;
 import com.agent.codereviewagent.config.RevisionProperties;
 import com.agent.codereviewagent.models.entity.CodingStandardRevisionEntity;
 import com.agent.codereviewagent.models.entity.FindingEntity;
-import com.agent.codereviewagent.service.*;
+import com.agent.codereviewagent.service.CodingStandardRevisionService;
+import com.agent.codereviewagent.service.CodingStandardSource;
+import com.agent.codereviewagent.service.FalsePositiveJudge;
+import com.agent.codereviewagent.service.FindingService;
+import com.agent.codereviewagent.service.GitlabClient;
+import com.agent.codereviewagent.service.ReviewRecordService;
+import com.agent.codereviewagent.service.Reviewer;
+import com.agent.codereviewagent.service.RevisionClient;
+import com.agent.codereviewagent.service.RevisionRecordService;
+import com.agent.codereviewagent.service.RevisionSummarizer;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -98,12 +107,25 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         if (candidates.isEmpty() || (!Boolean.TRUE.equals(checkpoint.getRetryPending())
                 && newCount < properties.getNewFindingsThreshold())) { return; }
         List<FindingEntity> eligible = judge(candidates);
+        if (eligible.isEmpty()) { return; }
         long eligibleNew = eligible.stream().filter(f -> f.getId() > checkpoint.getLastFindingId()).count();
-        if (eligible.size() < properties.getNewFindingsThreshold() || (!Boolean.TRUE.equals(checkpoint.getRetryPending())
+        boolean retryQualified = false;
+        if (Boolean.TRUE.equals(checkpoint.getRetryPending()) && checkpoint.getRetryFindingIds() != null) {
+            Set<Long> positive = eligible.stream().map(FindingEntity::getId).collect(Collectors.toSet());
+            var basis = Arrays.stream(checkpoint.getRetryFindingIds().split(",")).map(Long::valueOf).toList();
+            retryQualified = findings.listByIds(basis).stream()
+                    .filter(f -> f.getRevisionId() != null || positive.contains(f.getId())).count()
+                    >= properties.getNewFindingsThreshold();
+        }
+        if ((eligible.size() < properties.getNewFindingsThreshold() && !retryQualified) || (!Boolean.TRUE.equals(checkpoint.getRetryPending())
                 && eligibleNew < properties.getNewFindingsThreshold())) { return; }
         var snapshot = standards.load(projectId);
         if (snapshot.documents().isEmpty()) { return; }
         records.checkpoint(projectId, checkpoint.getLastFindingId(), true);
+        if (!retryQualified) {
+            records.retryBasis(projectId, eligible.stream().map(FindingEntity::getId).map(String::valueOf)
+                    .collect(Collectors.joining(",")));
+        }
         var result = summarizer.summarize(eligible, snapshot.documents());
         Proposal proposal = validate(result, eligible, snapshot.documents());
         long last = candidates.stream().mapToLong(FindingEntity::getId).max().orElse(checkpoint.getLastFindingId());

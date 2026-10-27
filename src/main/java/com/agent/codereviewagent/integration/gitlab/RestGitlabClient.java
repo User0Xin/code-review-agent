@@ -42,20 +42,33 @@ public class RestGitlabClient implements GitlabClient {
                 || refs.path("start_sha").asText().isBlank()) {
             return Optional.empty();
         }
-        return Optional.of(new DiffRefs(refs.path("head_sha").asText()));
+        return Optional.of(new DiffRefs(refs.path("head_sha").asText(), refs.path("base_sha").asText(),
+                refs.path("start_sha").asText()));
     }
 
     /** 以不可变 diff version 固定本次提交，拒绝 GitLab 因大小限制裁掉的差异。 */
     @Override
     public String readDiff(long projectId, long mergeRequestIid, String headSha) {
+        return readDiffVersion(projectId, mergeRequestIid, new DiffRefs(headSha), false).toString();
+    }
+
+    @Override
+    public String readDiff(long projectId, long mergeRequestIid, DiffRefs refs) {
+        return readDiffVersion(projectId, mergeRequestIid, refs, true).toString();
+    }
+
+    private JsonNode readDiffVersion(long projectId, long mergeRequestIid, DiffRefs refs, boolean exact) {
         String mergeRequest = mergeRequest(projectId, mergeRequestIid);
         for (JsonNode version : list(mergeRequest + "/versions")) {
-            if (!headSha.equals(version.path("head_commit_sha").asText())) { continue; }
+            if (!matchesVersion(version, refs, exact)) { continue; }
             JsonNode detail = get(mergeRequest + "/versions/" + version.path("id").asLong());
             JsonNode diffs = detail.path("diffs");
             String size = detail.path("real_size").asText();
-            if (!headSha.equals(detail.path("head_commit_sha").asText())
-                    || !"collected".equals(detail.path("state").asText())
+            String state = detail.path("state").asText();
+            boolean complete = "collected".equals(state) || ("without_files".equals(state)
+                    && "0".equals(size) && diffs.isArray() && diffs.size() == 0);
+            if (!matchesVersion(detail, refs, exact)
+                    || !complete
                     || !diffs.isArray() || !size.matches("[0-9]+")
                     || !size.equals(Integer.toString(diffs.size()))) {
                 throw new IllegalStateException("GitLab diff 版本尚未完整收集或已被截断");
@@ -65,9 +78,15 @@ public class RestGitlabClient implements GitlabClient {
                     throw new IllegalStateException("GitLab diff 文件被折叠或超出大小限制");
                 }
             }
-            return diffs.toString();
+            return diffs;
         }
         throw new IllegalStateException("找不到这次审查提交对应的 GitLab diff 版本");
+    }
+
+    private static boolean matchesVersion(JsonNode version, DiffRefs refs, boolean exact) {
+        return refs.headSha().equals(version.path("head_commit_sha").asText()) && (!exact
+                || (java.util.Objects.equals(refs.baseSha(), version.path("base_commit_sha").asText())
+                    && java.util.Objects.equals(refs.startSha(), version.path("start_commit_sha").asText())));
     }
 
     @Override
@@ -79,14 +98,24 @@ public class RestGitlabClient implements GitlabClient {
     @Override
     public long createLineDiscussion(long projectId, long mergeRequestIid, String path,
                                      Integer newLine, Integer oldLine, String headSha, String body) {
-        String mergeRequest = mergeRequest(projectId, mergeRequestIid);
-        JsonNode refs = get(mergeRequest).path("diff_refs");
-        if (!headSha.equals(refs.path("head_sha").asText())) {
+        DiffRefs refs = diffRefs(projectId, mergeRequestIid)
+                .orElseThrow(() -> new IllegalStateException("合并请求 diff 尚未就绪，不能写入行评论"));
+        if (!headSha.equals(refs.headSha())) {
             throw new IllegalStateException("合并请求提交已变化，不能写入旧审查的行评论");
+        }
+        return createLineDiscussion(projectId, mergeRequestIid, path, newLine, oldLine, refs, body);
+    }
+
+    @Override
+    public long createLineDiscussion(long projectId, long mergeRequestIid, String path,
+                                     Integer newLine, Integer oldLine, DiffRefs refs, String body) {
+        String mergeRequest = mergeRequest(projectId, mergeRequestIid);
+        if (!diffRefs(projectId, mergeRequestIid).filter(refs::equals).isPresent()) {
+            throw new IllegalStateException("合并请求 diff 版本已变化，不能写入旧审查的行评论");
         }
         String oldPath = path;
         String newPath = path;
-        for (JsonNode diff : list(mergeRequest + "/diffs")) {
+        for (JsonNode diff : readDiffVersion(projectId, mergeRequestIid, refs, true)) {
             if (path.equals(diff.path("new_path").asText()) || path.equals(diff.path("old_path").asText())) {
                 oldPath = diff.path("old_path").asText();
                 newPath = diff.path("new_path").asText();
@@ -96,14 +125,25 @@ public class RestGitlabClient implements GitlabClient {
         ObjectNode payload = json.createObjectNode().put("body", body);
         ObjectNode position = payload.putObject("position");
         position.put("position_type", "text");
-        position.put("base_sha", refs.path("base_sha").asText());
-        position.put("start_sha", refs.path("start_sha").asText());
-        position.put("head_sha", headSha);
+        position.put("base_sha", refs.baseSha());
+        position.put("start_sha", refs.startSha());
+        position.put("head_sha", refs.headSha());
         position.put("old_path", oldPath);
         position.put("new_path", newPath);
         if (newLine != null) { position.put("new_line", newLine); }
         if (oldLine != null) { position.put("old_line", oldLine); }
-        return createdNoteId(send("POST", mergeRequest + "/discussions", payload));
+        try {
+            return createdNoteId(send("POST", mergeRequest + "/discussions", payload));
+        }
+        catch (GitlabRequestException exception) {
+            String error = exception.responseBody.toLowerCase(java.util.Locale.ROOT);
+            if ((exception.status == 400 || exception.status == 422)
+                    && (error.contains("position") || error.contains("line_code")
+                        || error.contains("new_line") || error.contains("old_line"))) {
+                return createOverviewDiscussion(projectId, mergeRequestIid, body);
+            }
+            throw exception;
+        }
     }
 
     @Override
@@ -206,18 +246,29 @@ public class RestGitlabClient implements GitlabClient {
 
     private List<JsonNode> list(String path) {
         List<JsonNode> items = new ArrayList<>();
-        String page = "1";
-        do {
+        int page = 1;
+        while (true) {
             HttpResponse<String> response = request("GET", path + (path.contains("?") ? "&" : "?")
                     + "per_page=100&page=" + page, null);
             JsonNode batch = parse(response.body());
             if (!batch.isArray()) { throw new IllegalStateException("GitLab 列表响应格式不正确"); }
             batch.forEach(items::add);
-            page = response.headers().firstValue("X-Next-Page").orElse("");
-            if (!page.isBlank() && !page.matches("[1-9][0-9]*")) {
-                throw new IllegalStateException("GitLab 分页响应格式不正确");
+            Optional<String> nextHeader = response.headers().firstValue("X-Next-Page");
+            if (nextHeader.isPresent()) {
+                String next = nextHeader.get();
+                if (next.isBlank()) { break; }
+                try {
+                    int nextPage = Integer.parseInt(next);
+                    if (nextPage <= page) { throw new NumberFormatException(); }
+                    page = nextPage;
+                }
+                catch (NumberFormatException exception) {
+                    throw new IllegalStateException("GitLab 分页响应格式不正确");
+                }
             }
-        } while (!page.isBlank());
+            else if (batch.size() == 100) { page++; }
+            else { break; }
+        }
         return items;
     }
 
@@ -249,7 +300,7 @@ public class RestGitlabClient implements GitlabClient {
         try {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("GitLab 接口请求失败，HTTP " + response.statusCode());
+                throw new GitlabRequestException(response.statusCode(), response.body());
             }
             return response;
         }
@@ -262,5 +313,17 @@ public class RestGitlabClient implements GitlabClient {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    /** 响应正文只用于本适配器内判断位置拒绝，异常信息不暴露远端正文。 */
+    private static final class GitlabRequestException extends IllegalStateException {
+        private final int status;
+        private final String responseBody;
+
+        private GitlabRequestException(int status, String responseBody) {
+            super("GitLab 接口请求失败，HTTP " + status);
+            this.status = status;
+            this.responseBody = responseBody;
+        }
     }
 }

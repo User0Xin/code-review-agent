@@ -12,4 +12,5 @@ public class RevisionCheckpointEntity {
     private Long projectId;
     private Long lastFindingId;
     private Boolean retryPending;
+    private String retryFindingIds;
 }

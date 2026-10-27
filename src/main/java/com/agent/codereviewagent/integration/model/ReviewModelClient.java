@@ -39,7 +39,14 @@ public class ReviewModelClient {
         catch (IOException exception) {
             throw new IllegalStateException("无法加载审查指令或构造模型输入");
         }
-        ChatResponse response = model.call(new Prompt(List.of(new SystemMessage(instructions), new UserMessage(request))));
+        ChatResponse response;
+        try {
+            response = model.call(new Prompt(List.of(new SystemMessage(instructions), new UserMessage(request))));
+        }
+        catch (RuntimeException exception) {
+            // SDK 异常可能携带请求和原始响应，边界内转成固定原因，不保留异常链。
+            throw new IllegalStateException("审查模型调用失败");
+        }
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null
                 || response.getResult().getOutput().getText() == null) {
             throw new IllegalStateException("审查模型返回了空内容");

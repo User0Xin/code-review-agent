@@ -1,6 +1,7 @@
 package com.agent.codereviewagent.service.impl;
 
 import com.agent.codereviewagent.config.DiffWaitProperties;
+import com.agent.codereviewagent.config.GitlabProperties;
 import com.agent.codereviewagent.models.dto.MergeRequestWebhookRequest;
 import com.agent.codereviewagent.models.entity.FindingEntity;
 import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
@@ -42,6 +43,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private final ReviewClock clock;
     private final Sleeper sleeper;
     private final DiffWaitProperties diffWait;
+    private final GitlabProperties gitlabProperties;
 
     public MergeRequestReviewServiceImpl(GitlabClient gitlabClient,
                                          Reviewer reviewer,
@@ -53,7 +55,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                                          CodingStandardRevisionService revisions,
                                          ReviewClock clock,
                                          Sleeper sleeper,
-                                         DiffWaitProperties diffWait) {
+                                         DiffWaitProperties diffWait,
+                                         GitlabProperties gitlabProperties) {
         this.gitlabClient = gitlabClient;
         this.reviewer = reviewer;
         this.reviewRecordService = reviewRecordService;
@@ -65,10 +68,11 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         this.clock = clock;
         this.sleeper = sleeper;
         this.diffWait = diffWait;
+        this.gitlabProperties = gitlabProperties;
     }
 
     @Override
-    public void accept(String gitlabEvent, MergeRequestWebhookRequest request) {
+    public synchronized void accept(String gitlabEvent, MergeRequestWebhookRequest request) {
         // 只处理 GitLab 的合并请求事件。别的 hook、空 body 直接忽略，也不留审查记录。
         if (!"Merge Request Hook".equals(gitlabEvent)
                 || request == null
@@ -83,68 +87,85 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         long projectId = project == null || project.id() == null ? 0 : project.id();
         long mergeRequestIid = attributes.iid() == null ? 0 : attributes.iid();
         // 缺少项目或合并请求编号时无法写回，也不记审查记录。
-        if (projectId == 0 || mergeRequestIid == 0) {
+        if (projectId <= 0 || mergeRequestIid <= 0
+                || (gitlabProperties.getProjectId() > 0 && gitlabProperties.getProjectId() != projectId)) {
             return;
         }
+        ReviewContext context = new ReviewContext(projectId, mergeRequestIid, attributes.action());
+        String expected = attributes.lastCommit() == null ? null : attributes.lastCommit().id();
+        context.headSha = expected;
         try {
-            review(projectId, mergeRequestIid, attributes);
+            review(context, attributes, expected);
+        }
+        catch (RuntimeException exception) {
+            fail(context, context.phase, exception);
         }
         finally {
             revisions.checkAfterReview(projectId, mergeRequestIid);
         }
     }
 
-    private void review(long projectId, long mergeRequestIid, MergeRequestWebhookRequest.ObjectAttributes attributes) {
-        GitlabClient.DiffRefs diffRefs = waitForDiff(projectId, mergeRequestIid);
+    private void review(ReviewContext context, MergeRequestWebhookRequest.ObjectAttributes attributes, String expected) {
+        long projectId = context.projectId;
+        long mergeRequestIid = context.mergeRequestIid;
+        context.phase = "diff 读取失败";
+        GitlabClient.DiffRefs diffRefs = waitForDiff(projectId, mergeRequestIid, expected);
         if (diffRefs == null) {
-            fail(projectId, mergeRequestIid, DIFF_NOT_READY, null, null);
+            fail(context, DIFF_NOT_READY, null);
             return;
         }
+        context.headSha = diffRefs.headSha();
+        context.phase = "已有讨论读取失败";
         List<FindingEntity> existing = findingService.findByMergeRequest(projectId, mergeRequestIid);
         List<Reviewer.PriorFinding> priorFindings = priorFindings(projectId, mergeRequestIid, existing);
-        Reviewer.CodingStandards standards = loadStandards(projectId);
-        Reviewer.Spec spec;
-        try {
-            spec = loadSpec(projectId, attributes, diffRefs.headSha(), standards);
-        }
-        catch (RuntimeException exception) {
-            fail(projectId, mergeRequestIid, "spec 读取失败", null, standards);
+        context.phase = "编码规范读取失败";
+        context.standards = loadStandards(projectId);
+        context.phase = "spec 读取失败";
+        context.spec = loadSpec(projectId, attributes, diffRefs.headSha(), context.standards);
+        context.phase = "diff 正文读取失败";
+        String diff = gitlabClient.readDiff(projectId, mergeRequestIid, diffRefs);
+        context.phase = "模型审查失败";
+        Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
+                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, context.spec, context.standards, diff));
+        context.phase = "提交状态核对失败";
+        var current = gitlabClient.diffRefs(projectId, mergeRequestIid);
+        if (current.isEmpty() || !diffRefs.equals(current.get())) {
+            fail(context, "审查期间提交已变化", null);
             return;
         }
-        Reviewer.ReviewFindings findings = reviewer.review(new Reviewer.ReviewRequest(
-                projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, spec, standards,
-                gitlabClient.readDiff(projectId, mergeRequestIid, diffRefs.headSha())));
-        List<Long> resolved = findings.resolvedDiscussionIds() == null
-                ? List.of()
-                : findings.resolvedDiscussionIds();
-        List<Long> declined = findings.declinedDiscussionIds() == null
-                ? List.of()
-                : findings.declinedDiscussionIds();
-        int failed = postDrafts(
-                projectId,
-                mergeRequestIid,
-                diffRefs.headSha(),
+        List<Long> resolved = findings.resolvedDiscussionIds() == null ? List.of() : findings.resolvedDiscussionIds();
+        List<Long> declined = findings.declinedDiscussionIds() == null ? List.of() : findings.declinedDiscussionIds();
+        context.phase = "评论写回失败";
+        int failed = postDrafts(projectId, mergeRequestIid, diffRefs,
                 stillOpen(findings.drafts(), priorFindings, resolved, declined));
+        context.phase = "讨论状态更新失败";
         resolveKnownDiscussions(projectId, mergeRequestIid, existing, resolved, declined);
         if (failed > 0) {
-            fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回", spec, standards);
+            fail(context, "有 " + failed + " 条没能写回", null);
             return;
         }
-        reviewRecordService.recordSuccess(reviewRecord(projectId, mergeRequestIid, null, clock.now(), spec, standards));
-        // 已写回的发现都留下。若之前留过失败讨论，删掉它。
-        reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId -> {
-            gitlabClient.deleteNote(projectId, mergeRequestIid, noteId);
-            reviewRecordService.forgetFailureNote(projectId, mergeRequestIid);
-        });
+        ReviewRecordEntity record = reviewRecord(context, null, clock.now());
+        // 清理通知失败不抹掉本次成功审查，旧索引保留到下一次重试。
+        var old = reviewRecordService.findFailureNoteId(projectId, mergeRequestIid);
+        if (old.isPresent()) {
+            try {
+                gitlabClient.deleteNote(projectId, mergeRequestIid, old.get());
+                reviewRecordService.forgetFailureNote(projectId, mergeRequestIid);
+            }
+            catch (RuntimeException exception) {
+                record.setNoteError("失败说明清理失败：" + exception.getClass().getSimpleName());
+            }
+        }
+        reviewRecordService.recordSuccess(record);
     }
 
     /** 每条评论只写回一次。没写上的不记为发现，已经写上并保存的不撤回。 */
-    private int postDrafts(long projectId, long mergeRequestIid, String headSha, java.util.List<Reviewer.CommentDraft> drafts) {
+    private int postDrafts(long projectId, long mergeRequestIid, GitlabClient.DiffRefs refs, java.util.List<Reviewer.CommentDraft> drafts) {
         int failed = 0;
         for (Reviewer.CommentDraft draft : drafts.stream().distinct().toList()) {
             long discussionId;
             try {
-                discussionId = postOne(projectId, mergeRequestIid, headSha, draft);
+                discussionId = postOne(projectId, mergeRequestIid, refs, draft);
             }
             catch (RuntimeException exception) {
                 failed++;
@@ -161,7 +182,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                         draft.category(),
                         draft.citation(),
                         draft.commentBody(),
-                        headSha));
+                        refs.headSha()));
             }
             catch (RuntimeException exception) {
                 gitlabClient.deleteNote(projectId, mergeRequestIid, discussionId);
@@ -171,7 +192,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         return failed;
     }
 
-    private long postOne(long projectId, long mergeRequestIid, String headSha, Reviewer.CommentDraft draft) {
+    private long postOne(long projectId, long mergeRequestIid, GitlabClient.DiffRefs refs, Reviewer.CommentDraft draft) {
         if (draft.newLine() != null || draft.oldLine() != null) {
             return gitlabClient.createLineDiscussion(
                     projectId,
@@ -179,7 +200,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                     draft.path(),
                     draft.newLine(),
                     draft.oldLine(),
-                    headSha,
+                    refs,
                     draft.commentBody());
         }
         return gitlabClient.createOverviewDiscussion(projectId, mergeRequestIid, draft.commentBody());
@@ -281,57 +302,88 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     }
 
     /** 立刻读一次 diff。没就绪再按间隔重试，总次数至少为 1。始终没有则返回 null。 */
-    private GitlabClient.DiffRefs waitForDiff(long projectId, long mergeRequestIid) {
+    private GitlabClient.DiffRefs waitForDiff(long projectId, long mergeRequestIid, String expectedSha) {
         int attempts = Math.max(diffWait.getMaxAttempts(), 1);
         for (int attempt = 1; attempt <= attempts; attempt++) {
             if (attempt > 1) {
                 sleeper.sleep(diffWait.getInterval());
             }
             var ready = gitlabClient.diffRefs(projectId, mergeRequestIid);
-            if (ready.isPresent()) {
+            if (ready.isPresent() && (expectedSha == null || expectedSha.isBlank()
+                    || expectedSha.equals(ready.get().headSha()))) {
                 return ready.get();
             }
         }
         return null;
     }
 
-    /** 同一合并请求只留最新一条失败概览讨论：先删旧的，再写新的，并记住新 note id。 */
-    private void fail(long projectId, long mergeRequestIid, String reason, Reviewer.Spec spec, Reviewer.CodingStandards standards) {
-        reviewRecordService.findFailureNoteId(projectId, mergeRequestIid).ifPresent(noteId ->
-                gitlabClient.deleteNote(projectId, mergeRequestIid, noteId));
-        Instant occurredAt = clock.now();
-        long noteId = gitlabClient.createOverviewDiscussion(
-                projectId,
-                mergeRequestIid,
-                failureBody(reason, occurredAt));
-        reviewRecordService.recordFailure(
-                reviewRecord(projectId, mergeRequestIid, reason, occurredAt, spec, standards),
-                noteId);
-    }
-
-    private static ReviewRecordEntity reviewRecord(long projectId,
-                                                    long mergeRequestIid,
-                                                    String reason,
-                                                    Instant occurredAt,
-                                                    Reviewer.Spec spec,
-                                                    Reviewer.CodingStandards standards) {
-        ReviewRecordEntity record = new ReviewRecordEntity();
-        record.setProjectId(projectId);
-        record.setMergeRequestIid(mergeRequestIid);
-        record.setReason(reason);
-        record.setOccurredAt(occurredAt.toString());
-        if (spec != null) {
-            record.setSpecSkipped(spec.skipped());
-            record.setSpecDocumentPaths(spec.documents().stream()
-                    .map(Reviewer.SpecDocument::path)
+    /** 通知维护失败仍保存主审查结果，并保留可供下次清理的索引。 */
+    private void fail(ReviewContext context, String reason, RuntimeException failure) {
+        ReviewRecordEntity record = reviewRecord(context, reason, clock.now());
+        if (failure != null) {
+            // 保存错误类型与代码位置，不保存可能携带提示词、模型原文或凭据的异常消息。
+            record.setFailureDetail(failure.getClass().getName() + "\n"
+                    + java.util.Arrays.stream(failure.getStackTrace()).map(Object::toString)
                     .collect(java.util.stream.Collectors.joining("\n")));
         }
-        if (standards != null) {
-            record.setStandardDocumentPaths(standards.documents().stream()
-                    .map(Reviewer.StandardDocument::path)
+        Long noteId = reviewRecordService.findFailureNoteId(context.projectId, context.mergeRequestIid).orElse(null);
+        boolean canCreate = true;
+        if (noteId != null) {
+            try {
+                gitlabClient.deleteNote(context.projectId, context.mergeRequestIid, noteId);
+                reviewRecordService.forgetFailureNote(context.projectId, context.mergeRequestIid);
+                noteId = null;
+            }
+            catch (RuntimeException exception) {
+                canCreate = false;
+                record.setNoteError("旧失败说明删除失败：" + exception.getClass().getSimpleName());
+            }
+        }
+        if (canCreate) {
+            try {
+                noteId = gitlabClient.createOverviewDiscussion(context.projectId, context.mergeRequestIid,
+                        failureBody(reason, Instant.parse(record.getOccurredAt())));
+            }
+            catch (RuntimeException exception) {
+                record.setNoteError("失败说明写回失败：" + exception.getClass().getSimpleName());
+            }
+        }
+        reviewRecordService.recordFailure(record, noteId);
+    }
+
+    private static ReviewRecordEntity reviewRecord(ReviewContext context, String reason, Instant occurredAt) {
+        ReviewRecordEntity record = new ReviewRecordEntity();
+        record.setProjectId(context.projectId);
+        record.setMergeRequestIid(context.mergeRequestIid);
+        record.setTrigger(context.trigger);
+        record.setHeadSha(context.headSha);
+        record.setReason(reason);
+        record.setOccurredAt(occurredAt.toString());
+        if (context.spec != null) {
+            record.setSpecSkipped(context.spec.skipped());
+            record.setSpecDocumentPaths(context.spec.documents().stream().map(Reviewer.SpecDocument::path)
+                    .collect(java.util.stream.Collectors.joining("\n")));
+        }
+        if (context.standards != null) {
+            record.setStandardDocumentPaths(context.standards.documents().stream().map(Reviewer.StandardDocument::path)
                     .collect(java.util.stream.Collectors.joining("\n")));
         }
         return record;
+    }
+
+    private static final class ReviewContext {
+        private final long projectId;
+        private final long mergeRequestIid;
+        private final String trigger;
+        private String headSha;
+        private String phase = "审查执行失败";
+        private Reviewer.Spec spec;
+        private Reviewer.CodingStandards standards;
+        private ReviewContext(long projectId, long mergeRequestIid, String trigger) {
+            this.projectId = projectId;
+            this.mergeRequestIid = mergeRequestIid;
+            this.trigger = trigger;
+        }
     }
 
     private static FindingEntity finding(long projectId,

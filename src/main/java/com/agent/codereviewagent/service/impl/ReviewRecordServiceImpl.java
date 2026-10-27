@@ -38,8 +38,17 @@ public class ReviewRecordServiceImpl
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void recordFailure(ReviewRecordEntity record, long failureNoteId) {
+        recordFailure(record, Long.valueOf(failureNoteId));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void recordFailure(ReviewRecordEntity record, Long failureNoteId) {
         record.setOutcome(FAILED);
-        reviewFailureNoteMapper.upsert(record.getProjectId(), record.getMergeRequestIid(), failureNoteId);
+        record.setFailureNoteId(failureNoteId);
+        if (failureNoteId != null) {
+            reviewFailureNoteMapper.upsert(record.getProjectId(), record.getMergeRequestIid(), failureNoteId);
+        }
         save(record);
     }
 

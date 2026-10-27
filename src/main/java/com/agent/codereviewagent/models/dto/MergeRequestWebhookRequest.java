@@ -20,6 +20,10 @@ public record MergeRequestWebhookRequest(
             Long iid,
             String oldrev,
             @JsonProperty("source_branch") String sourceBranch,
-            String description) {
+            String description,
+            @JsonProperty("last_commit") Commit lastCommit) {
     }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Commit(String id) { }
 }
