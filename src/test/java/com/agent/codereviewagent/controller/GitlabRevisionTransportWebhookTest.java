@@ -291,6 +291,9 @@ class GitlabRevisionTransportWebhookTest {
 
     @TestConfiguration
     static class Fakes {
+        @Bean @Primary com.agent.codereviewagent.service.FalsePositiveJudge revisionTransportFalsePositiveJudge() {
+            return (finding, replies) -> new com.agent.codereviewagent.service.FalsePositiveJudge.Decision(false, "发现未被否定。");
+        }
         @Bean @Primary GitlabClient revisionTransportGitlab() { return GITLAB; }
         @Bean @Primary Reviewer revisionTransportReviewer() { return request -> Reviewer.ReviewFindings.of(drafts); }
         @Bean @Primary WorkItemClient revisionTransportWorkItems() { return id -> Optional.empty(); }

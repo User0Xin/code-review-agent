@@ -26,10 +26,13 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
     private final RevisionClient client;
     private final RevisionProperties properties;
     private final ObjectMapper json;
+    private final FalsePositiveJudge judge;
+    private final GitlabClient gitlab;
 
     public CodingStandardRevisionServiceImpl(FindingService findings, RevisionRecordService records,
             ReviewRecordService reviews, CodingStandardSource standards, RevisionSummarizer summarizer,
-            RevisionClient client, RevisionProperties properties, ObjectMapper json) {
+            RevisionClient client, RevisionProperties properties, ObjectMapper json,
+            FalsePositiveJudge judge, GitlabClient gitlab) {
         this.findings = findings;
         this.records = records;
         this.reviews = reviews;
@@ -38,6 +41,8 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         this.client = client;
         this.properties = properties;
         this.json = json;
+        this.judge = judge;
+        this.gitlab = gitlab;
     }
 
     @Override
@@ -64,6 +69,22 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         if (active.isPresent()) {
             CodingStandardRevisionEntity revision = active.get();
             if ("PREPARING".equals(revision.getState())) {
+                var recovered = client.findBySourceBranch(projectId, revision.getSourceBranch());
+                if (recovered.isPresent()) {
+                    records.complete(revision, recovered.get());
+                    return;
+                }
+                Set<Long> proposedIds = Arrays.stream(revision.getFindingIds().split(",")).map(Long::valueOf)
+                        .collect(Collectors.toSet());
+                List<FindingEntity> proposed = findings.findUnconsumed(projectId).stream()
+                        .filter(f -> proposedIds.contains(f.getId())).toList();
+                if (judge(proposed).size() != proposedIds.size()) {
+                    // 尚未打开的提案不能使用刚被开发者否定的发现；旧源分支不再创建 MR。
+                    revision.setState("CLOSED");
+                    records.saveState(revision);
+                    records.checkpoint(projectId, 0, false);
+                    return;
+                }
                 publish(revision);
                 return;
             }
@@ -76,11 +97,15 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         long newCount = candidates.stream().filter(f -> f.getId() > checkpoint.getLastFindingId()).count();
         if (candidates.isEmpty() || (!Boolean.TRUE.equals(checkpoint.getRetryPending())
                 && newCount < properties.getNewFindingsThreshold())) { return; }
+        List<FindingEntity> eligible = judge(candidates);
+        long eligibleNew = eligible.stream().filter(f -> f.getId() > checkpoint.getLastFindingId()).count();
+        if (eligible.size() < properties.getNewFindingsThreshold() || (!Boolean.TRUE.equals(checkpoint.getRetryPending())
+                && eligibleNew < properties.getNewFindingsThreshold())) { return; }
         var snapshot = standards.load(projectId);
         if (snapshot.documents().isEmpty()) { return; }
         records.checkpoint(projectId, checkpoint.getLastFindingId(), true);
-        var result = summarizer.summarize(candidates, snapshot.documents());
-        Proposal proposal = validate(result, candidates, snapshot.documents());
+        var result = summarizer.summarize(eligible, snapshot.documents());
+        Proposal proposal = validate(result, eligible, snapshot.documents());
         long last = candidates.stream().mapToLong(FindingEntity::getId).max().orElse(checkpoint.getLastFindingId());
         if (proposal.files().isEmpty()) {
             records.checkpoint(projectId, last, proposal.rejected());
@@ -99,6 +124,20 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         records.prepare(revision);
         records.checkpoint(projectId, last, proposal.rejected());
         publish(revision);
+    }
+
+    private List<FindingEntity> judge(List<FindingEntity> candidates) {
+        List<FindingEntity> eligible = new ArrayList<>();
+        for (FindingEntity finding : candidates) {
+            var replies = gitlab.listReplies(finding.getProjectId(), finding.getMergeRequestIid(), finding.getDiscussionId());
+            var decision = judge.judge(finding, replies);
+            if (decision == null || decision.falsePositive() == null || decision.reason() == null || decision.reason().isBlank()) {
+                throw new IllegalStateException("误报判定缺少结论或理由");
+            }
+            findings.recordFalsePositive(finding, decision);
+            if (!decision.falsePositive()) { eligible.add(finding); }
+        }
+        return eligible;
     }
 
     private void publish(CodingStandardRevisionEntity revision) {

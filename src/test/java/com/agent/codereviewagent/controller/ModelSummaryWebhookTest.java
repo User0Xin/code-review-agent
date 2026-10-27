@@ -189,6 +189,9 @@ class ModelSummaryWebhookTest {
 
     @TestConfiguration
     static class Fakes {
+        @Bean @Primary com.agent.codereviewagent.service.FalsePositiveJudge summaryFalsePositiveJudge() {
+            return (finding, replies) -> new com.agent.codereviewagent.service.FalsePositiveJudge.Decision(false, "发现未被否定。");
+        }
         @Bean @Primary SummaryGitlab summaryGitlab() { return new SummaryGitlab(); }
         @Bean @Primary RecordingRevisions summaryRemoteRevisions() { return new RecordingRevisions(); }
         @Bean @Primary Reviewer summaryReviewer() {

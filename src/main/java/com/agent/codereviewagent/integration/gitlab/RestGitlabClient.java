@@ -27,6 +27,7 @@ public class RestGitlabClient implements GitlabClient {
     private final ObjectMapper json;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10)).version(HttpClient.Version.HTTP_1_1).build();
+    private Long currentUserId;
 
     public RestGitlabClient(GitlabProperties properties, ObjectMapper json) {
         this.properties = properties;
@@ -113,13 +114,26 @@ public class RestGitlabClient implements GitlabClient {
     @Override
     public List<String> listReplies(long projectId, long mergeRequestIid, long discussionId) {
         JsonNode discussion = discussion(projectId, mergeRequestIid, discussionId);
+        long self = currentUserId();
         List<String> replies = new ArrayList<>();
         for (JsonNode note : discussion.path("notes")) {
-            if (note.path("id").asLong() != discussionId && !note.path("system").asBoolean()) {
+            if (note.path("id").asLong() == discussionId || note.path("system").asBoolean()) { continue; }
+            long authorId = note.path("author").path("id").asLong();
+            if (authorId <= 0) { throw new IllegalStateException("GitLab 讨论回复缺少作者标识"); }
+            if (authorId != self) {
                 replies.add(note.path("body").asText());
             }
         }
         return List.copyOf(replies);
+    }
+
+    private synchronized long currentUserId() {
+        if (currentUserId == null) {
+            long id = get("/user").path("id").asLong();
+            if (id <= 0) { throw new IllegalStateException("GitLab 未返回审查服务账号标识"); }
+            currentUserId = id;
+        }
+        return currentUserId;
     }
 
     @Override

@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS finding (
     citation TEXT,
     comment_body TEXT NOT NULL,
     head_sha TEXT NOT NULL,
-    revision_id INTEGER
+    revision_id INTEGER,
+    false_positive INTEGER,
+    false_positive_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_finding_merge_request

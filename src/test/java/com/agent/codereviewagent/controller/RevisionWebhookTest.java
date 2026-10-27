@@ -246,6 +246,9 @@ class RevisionWebhookTest {
 
     @TestConfiguration
     static class Fakes {
+        @Bean @Primary com.agent.codereviewagent.service.FalsePositiveJudge revisionFalsePositiveJudge() {
+            return (finding, replies) -> new com.agent.codereviewagent.service.FalsePositiveJudge.Decision(false, "发现未被否定。");
+        }
         @Bean @Primary GitlabClient gitlabClient() { return GITLAB; }
         @Bean @Primary Reviewer reviewer() { return REVIEWER; }
         @Bean @Primary WorkItemClient workItemClient() { return id -> Optional.empty(); }

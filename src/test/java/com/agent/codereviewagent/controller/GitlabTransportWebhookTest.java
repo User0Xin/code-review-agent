@@ -50,6 +50,8 @@ class GitlabTransportWebhookTest {
     private static volatile String reply = "";
     private static volatile boolean discussionOnSecondPage;
     private static volatile boolean firstDiscussionResolved;
+    private static volatile boolean includeOwnAndSystemReplies;
+    private static volatile Reviewer.ReviewRequest lastReview;
     private static volatile List<Reviewer.CommentDraft> drafts = List.of();
     private static volatile List<Long> resolved = List.of();
 
@@ -73,6 +75,8 @@ class GitlabTransportWebhookTest {
         reply = "";
         discussionOnSecondPage = false;
         firstDiscussionResolved = false;
+        includeOwnAndSystemReplies = false;
+        lastReview = null;
         drafts = List.of();
         resolved = List.of();
         jdbc.update("DELETE FROM finding");
@@ -154,6 +158,22 @@ class GitlabTransportWebhookTest {
     }
 
     @Test
+    void laterReviewReceivesAllDeveloperRepliesInOrderAndExcludesTheServiceAccountAndSystemNotes() throws Exception {
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 12, null, "缺陷", null, "错误没有处理。"));
+        webhook("open");
+        drafts = List.of();
+        reply = "最初认为不需要修改。";
+        includeOwnAndSystemReplies = true;
+        discussionOnSecondPage = true;
+
+        webhook("update");
+
+        assertThat(lastReview.priorFindings()).singleElement().satisfies(finding ->
+                assertThat(finding.replies()).containsExactly("最初认为不需要修改。", "复核后确认需要修改。", "补充调用链供参考。"));
+        assertThat(POSTED).hasSize(1);
+    }
+
+    @Test
     void failedHttpWriteRetainsTheEarlierFindingAndWritesOnlyOneFailureDiscussion() throws Exception {
         failSecond = true;
         drafts = List.of(
@@ -199,6 +219,7 @@ class GitlabTransportWebhookTest {
         if (path.endsWith("/merge_requests/3")) {
             response = "{\"diff_refs\":{\"head_sha\":\"head\",\"base_sha\":\"base\",\"start_sha\":\"start\"}}";
         }
+        else if (path.equals("/api/v4/user")) { response = "{\"id\":42,\"username\":\"review-service\"}"; }
         else if (path.endsWith("/diffs")) {
             response = "[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"@@ -1 +1 @@\\n-old\\n+new\"}]";
         }
@@ -221,7 +242,8 @@ class GitlabTransportWebhookTest {
             }
             else {
                 status = 201;
-                response = "{\"id\":\"thread-" + (100 + number) + "\",\"notes\":[{\"id\":" + (100 + number) + "}]}";
+                response = "{\"id\":\"thread-" + (100 + number) + "\",\"notes\":[{\"id\":"
+                        + (100 + number) + ",\"author\":{\"id\":42}}]}";
             }
         }
         else if (path.endsWith("/discussions") && method.equals("GET")) {
@@ -230,9 +252,22 @@ class GitlabTransportWebhookTest {
                 response = "[]";
             }
             else {
-                response = "[{\"id\":\"thread-101\",\"notes\":[{\"id\":101,\"body\":\"发现\",\"resolved\":"
-                        + firstDiscussionResolved + "},"
-                        + "{\"id\":201,\"body\":" + JSON.writeValueAsString(reply) + "}]}]";
+                var discussion = JSON.createObjectNode().put("id", "thread-101");
+                var notes = discussion.putArray("notes");
+                notes.addObject().put("id", 101).put("body", "发现").put("resolved", firstDiscussionResolved)
+                        .putObject("author").put("id", 42);
+                notes.addObject().put("id", 201).put("body", reply).putObject("author").put("id", 7);
+                if (includeOwnAndSystemReplies) {
+                    notes.addObject().put("id", 202).put("body", "审查服务自己的后续回复：不需要修改。")
+                            .putObject("author").put("id", 42);
+                    notes.addObject().put("id", 203).put("body", "系统通知").put("system", true)
+                            .putObject("author").put("id", 7);
+                    notes.addObject().put("id", 204).put("body", "复核后确认需要修改。")
+                            .putObject("author").put("id", 8);
+                    notes.addObject().put("id", 205).put("body", "补充调用链供参考。")
+                            .putObject("author").put("id", 7);
+                }
+                response = "[" + discussion + "]";
             }
         }
         else if (path.endsWith("/discussions/thread-101") && method.equals("PUT")) {
@@ -252,7 +287,10 @@ class GitlabTransportWebhookTest {
     @TestConfiguration
     static class Fakes {
         @Bean @Primary Reviewer transportReviewer() {
-            return request -> new Reviewer.ReviewFindings(drafts, resolved);
+            return request -> {
+                lastReview = request;
+                return new Reviewer.ReviewFindings(drafts, resolved);
+            };
         }
         @Bean @Primary WorkItemClient transportWorkItems() { return id -> Optional.empty(); }
         @Bean @Primary SpecDocumentPicker transportSpecPicker() { return paths -> List.of(); }

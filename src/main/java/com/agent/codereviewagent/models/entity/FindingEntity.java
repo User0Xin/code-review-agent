@@ -34,4 +34,6 @@ public class FindingEntity {
     private String headSha;
 
     private Long revisionId;
+    private Boolean falsePositive;
+    private String falsePositiveReason;
 }

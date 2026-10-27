@@ -26,6 +26,8 @@ public class ReviewDatabaseMigration implements InitializingBean {
         addColumn("review_record", "standard_document_paths", "TEXT");
         addColumn("review_record", "summary_error", "TEXT");
         addColumn("finding", "revision_id", "INTEGER");
+        addColumn("finding", "false_positive", "INTEGER");
+        addColumn("finding", "false_positive_reason", "TEXT");
         addColumn("coding_standard_revision", "base_ref", "TEXT");
     }
 
