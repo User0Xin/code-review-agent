@@ -24,6 +24,9 @@ public class ReviewDatabaseMigration implements InitializingBean {
         addColumn("review_record", "spec_skipped", "INTEGER");
         addColumn("review_record", "spec_document_paths", "TEXT");
         addColumn("review_record", "standard_document_paths", "TEXT");
+        addColumn("review_record", "summary_error", "TEXT");
+        addColumn("finding", "revision_id", "INTEGER");
+        addColumn("coding_standard_revision", "base_ref", "TEXT");
     }
 
     private void addColumn(String table, String name, String type) {

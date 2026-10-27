@@ -157,6 +157,13 @@ public class RestGitlabClient implements GitlabClient {
         return branch;
     }
 
+    @Override
+    public String branchHead(long projectId, String branch) {
+        String sha = get(project(projectId) + "/repository/branches/" + encode(branch)).path("commit").path("id").asText();
+        if (sha.isBlank()) { throw new IllegalStateException("规范分支缺少提交标识"); }
+        return sha;
+    }
+
     private JsonNode discussion(long projectId, long mergeRequestIid, long noteId) {
         for (JsonNode discussion : list(mergeRequest(projectId, mergeRequestIid) + "/discussions")) {
             for (JsonNode note : discussion.path("notes")) {

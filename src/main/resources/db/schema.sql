@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS review_record (
     occurred_at TEXT NOT NULL,
     spec_skipped INTEGER,
     spec_document_paths TEXT,
-    standard_document_paths TEXT
+    standard_document_paths TEXT,
+    summary_error TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_record_merge_request
@@ -24,7 +25,8 @@ CREATE TABLE IF NOT EXISTS finding (
     category TEXT,
     citation TEXT,
     comment_body TEXT NOT NULL,
-    head_sha TEXT NOT NULL
+    head_sha TEXT NOT NULL,
+    revision_id INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_finding_merge_request
@@ -36,4 +38,28 @@ CREATE TABLE IF NOT EXISTS review_failure_note (
     merge_request_iid INTEGER NOT NULL,
     note_id INTEGER NOT NULL,
     UNIQUE (project_id, merge_request_iid)
+);
+
+CREATE TABLE IF NOT EXISTS coding_standard_revision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    source_branch TEXT NOT NULL UNIQUE,
+    target_branch TEXT NOT NULL,
+    base_ref TEXT,
+    merge_request_iid INTEGER,
+    state TEXT NOT NULL CHECK(state IN ('PREPARING', 'OPEN', 'CLOSED', 'MERGED')),
+    files_json TEXT NOT NULL,
+    finding_ids TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    error TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_revision
+    ON coding_standard_revision(project_id) WHERE state IN ('PREPARING', 'OPEN');
+
+CREATE TABLE IF NOT EXISTS revision_checkpoint (
+    project_id INTEGER PRIMARY KEY,
+    last_finding_id INTEGER NOT NULL DEFAULT 0,
+    retry_pending INTEGER NOT NULL DEFAULT 0
 );

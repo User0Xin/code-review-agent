@@ -30,4 +30,13 @@ public class FindingServiceImpl
                 .orderByAsc(FindingEntity::getId)
                 .list();
     }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<FindingEntity> findUnconsumed(long projectId) {
+        return lambdaQuery().eq(FindingEntity::getProjectId, projectId)
+                .isNull(FindingEntity::getRevisionId)
+                .in(FindingEntity::getCategory, "编码规范", "缺陷")
+                .orderByAsc(FindingEntity::getId).list();
+    }
 }

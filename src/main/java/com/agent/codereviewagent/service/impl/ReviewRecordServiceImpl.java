@@ -70,4 +70,16 @@ public class ReviewRecordServiceImpl
                 .eq(ReviewFailureNoteEntity::getProjectId, projectId)
                 .eq(ReviewFailureNoteEntity::getMergeRequestIid, mergeRequestIid));
     }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void recordRevisionFailure(long projectId, long mergeRequestIid, String error) {
+        ReviewRecordEntity latest = lambdaQuery().eq(ReviewRecordEntity::getProjectId, projectId)
+                .eq(ReviewRecordEntity::getMergeRequestIid, mergeRequestIid)
+                .orderByDesc(ReviewRecordEntity::getId).last("LIMIT 1").one();
+        if (latest != null) {
+            latest.setSummaryError(error);
+            updateById(latest);
+        }
+    }
 }

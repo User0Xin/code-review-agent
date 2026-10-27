@@ -28,4 +28,6 @@ public class ReviewRecordEntity {
     private String specDocumentPaths;
 
     private String standardDocumentPaths;
+
+    private String summaryError;
 }

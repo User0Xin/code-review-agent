@@ -210,6 +210,7 @@ class GitlabTransportWebhookTest {
                     + "\"diffs\":[{\"old_path\":\"old.go\",\"new_path\":\"renamed.go\",\"diff\":\"+code\"}]}";
         }
         else if (path.endsWith("/repository/tree")) { response = "[]"; }
+        else if (path.endsWith("/repository/branches/main")) { response = "{\"commit\":{\"id\":\"main\"}}"; }
         else if (path.endsWith("/projects/9")) { response = "{\"default_branch\":\"main\"}"; }
         else if (path.endsWith("/discussions") && method.equals("POST")) {
             POSTED.add(body);

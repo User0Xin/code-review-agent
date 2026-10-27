@@ -1,11 +1,11 @@
 package com.agent.codereviewagent.service.impl;
 
 import com.agent.codereviewagent.config.DiffWaitProperties;
-import com.agent.codereviewagent.config.StandardsBranchProperties;
 import com.agent.codereviewagent.models.dto.MergeRequestWebhookRequest;
 import com.agent.codereviewagent.models.entity.FindingEntity;
 import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
-import com.agent.codereviewagent.service.CodingStandardPicker;
+import com.agent.codereviewagent.service.CodingStandardSource;
+import com.agent.codereviewagent.service.CodingStandardRevisionService;
 import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
@@ -37,8 +37,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private final FindingService findingService;
     private final WorkItemClient workItemClient;
     private final SpecDocumentPicker specDocumentPicker;
-    private final CodingStandardPicker codingStandardPicker;
-    private final StandardsBranchProperties standardsBranch;
+    private final CodingStandardSource standardSource;
+    private final CodingStandardRevisionService revisions;
     private final ReviewClock clock;
     private final Sleeper sleeper;
     private final DiffWaitProperties diffWait;
@@ -49,8 +49,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                                          FindingService findingService,
                                          WorkItemClient workItemClient,
                                          SpecDocumentPicker specDocumentPicker,
-                                         CodingStandardPicker codingStandardPicker,
-                                         StandardsBranchProperties standardsBranch,
+                                         CodingStandardSource standardSource,
+                                         CodingStandardRevisionService revisions,
                                          ReviewClock clock,
                                          Sleeper sleeper,
                                          DiffWaitProperties diffWait) {
@@ -60,8 +60,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         this.findingService = findingService;
         this.workItemClient = workItemClient;
         this.specDocumentPicker = specDocumentPicker;
-        this.codingStandardPicker = codingStandardPicker;
-        this.standardsBranch = standardsBranch;
+        this.standardSource = standardSource;
+        this.revisions = revisions;
         this.clock = clock;
         this.sleeper = sleeper;
         this.diffWait = diffWait;
@@ -86,6 +86,15 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         if (projectId == 0 || mergeRequestIid == 0) {
             return;
         }
+        try {
+            review(projectId, mergeRequestIid, attributes);
+        }
+        finally {
+            revisions.checkAfterReview(projectId, mergeRequestIid);
+        }
+    }
+
+    private void review(long projectId, long mergeRequestIid, MergeRequestWebhookRequest.ObjectAttributes attributes) {
         GitlabClient.DiffRefs diffRefs = waitForDiff(projectId, mergeRequestIid);
         if (diffRefs == null) {
             fail(projectId, mergeRequestIid, DIFF_NOT_READY, null, null);
@@ -246,21 +255,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     }
 
     private Reviewer.CodingStandards loadStandards(long projectId) {
-        String configured = standardsBranch.getBranch();
-        String ref = configured == null || configured.isBlank()
-                ? gitlabClient.defaultBranch(projectId)
-                : configured;
-        java.util.ArrayList<Reviewer.StandardDocument> documents = new java.util.ArrayList<>();
-        java.util.List<String> candidates = gitlabClient.listFiles(projectId, ref).stream()
-                .filter(MergeRequestReviewServiceImpl::standardFile)
-                .toList();
-        for (String path : codingStandardPicker.pick(candidates)) {
-            if (!candidates.contains(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
-                continue;
-            }
-            documents.add(new Reviewer.StandardDocument(path, gitlabClient.readFile(projectId, path, ref)));
-        }
-        return new Reviewer.CodingStandards(java.util.List.copyOf(documents), true, "编码规范优先");
+        return standardSource.load(projectId).standards();
     }
 
     private Reviewer.Spec loadSpec(long projectId,
@@ -384,32 +379,6 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         }
         String id = name.substring(0, dash);
         return id.chars().allMatch(Character::isDigit) ? Optional.of(id) : Optional.empty();
-    }
-
-    /** 规范分支上可以当作编码规范的路径。lint 配置、依赖目录和生成目录不算。 */
-    private static boolean standardFile(String path) {
-        if (path == null || path.isBlank() || path.contains("..")) {
-            return false;
-        }
-        String normalized = path.replace('\\', '/');
-        if (normalized.startsWith("/")) {
-            normalized = normalized.substring(1);
-        }
-        String[] segments = normalized.split("/");
-        String name = segments[segments.length - 1].toLowerCase(java.util.Locale.ROOT);
-        if (!(name.endsWith(".md") || name.endsWith(".mdx") || name.endsWith(".rst")
-                || name.endsWith(".txt") || name.endsWith(".adoc"))) {
-            return false;
-        }
-        for (String segment : segments) {
-            if (segment.equals("vendor")
-                    || segment.equals("node_modules")
-                    || segment.equals(".git")
-                    || segment.equals("dist")) {
-                return false;
-            }
-        }
-        return true;
     }
 
     /** 仓库文档里可以进入 spec 的路径。 */

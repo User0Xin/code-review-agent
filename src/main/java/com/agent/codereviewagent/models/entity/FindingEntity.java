@@ -32,4 +32,6 @@ public class FindingEntity {
     private String commentBody;
 
     private String headSha;
+
+    private Long revisionId;
 }

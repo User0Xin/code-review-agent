@@ -18,4 +18,6 @@ public interface ReviewRecordService extends IService<ReviewRecordEntity> {
     Optional<Long> findFailureNoteId(long projectId, long mergeRequestIid);
 
     void forgetFailureNote(long projectId, long mergeRequestIid);
+
+    void recordRevisionFailure(long projectId, long mergeRequestIid, String error);
 }

@@ -39,6 +39,9 @@ demo:
 
 # diff 未就绪时的重试。超过 max-attempts 后留下一条失败概览讨论。
 review:
+  revision:
+    new-findings-threshold: ${REVIEW_REVISION_N:20}
+    minimum-group-size: ${REVIEW_REVISION_M:3}
   gitlab:
     base-url: ${GITLAB_BASE_URL:}
     token: ${GITLAB_TOKEN:}

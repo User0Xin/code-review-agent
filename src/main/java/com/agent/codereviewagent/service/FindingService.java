@@ -11,4 +11,6 @@ public interface FindingService extends IService<FindingEntity> {
     void recordPostedFinding(FindingEntity finding);
 
     List<FindingEntity> findByMergeRequest(long projectId, long mergeRequestIid);
+
+    List<FindingEntity> findUnconsumed(long projectId);
 }

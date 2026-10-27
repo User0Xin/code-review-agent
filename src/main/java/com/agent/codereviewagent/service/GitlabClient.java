@@ -32,6 +32,8 @@ public interface GitlabClient {
 
     String defaultBranch(long projectId);
 
+    default String branchHead(long projectId, String branch) { return branch; }
+
     record DiffRefs(String headSha) {
     }
 }
