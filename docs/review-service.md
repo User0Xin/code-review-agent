@@ -104,3 +104,9 @@ Content-Type: application/json
 总结或创建修订失败不另发通知，下一次审查结束重试，没有独立定时重试任务。创建远端修订前先保存 `PREPARING` 提案，包括固定基线提交、源分支、文件内容和发现 ID。重启后先用同一源分支寻找已经创建的修订；远端已提交但尚未创建合并请求时核对文件并继续创建，避免重复提交或打开第二份修订。尚未打开的提案在重试前重判相关回复，已被开发者否定的依据不能继续发布。
 
 已有一份打开的修订时，其他发现继续积累。修订被使用的发现记录所属修订并停止计数；即使修订未合并便关闭，也不放回待总结。只有后续新产生的发现重新积累。服务不会批准或合并这些修订。
+
+## 设计与实现索引
+
+[设计地图 #1](https://github.com/User0Xin/code-review-agent/issues/1) 的 13 项设计子 issue 已完成，设计结果为 [spec #16](https://github.com/User0Xin/code-review-agent/issues/16)。该 spec 的实现子 issue #17–#24 已完成，并进入 `main`；实现收口提交为 [31f96b3](https://github.com/User0Xin/code-review-agent/commit/31f96b3babaea98e8e1ce377703f5463843bbee9)。
+
+2026-10-27 完成核验时，95 项测试通过 `mvn clean test` 和 `mvn test`；`mvn -DskipTests package` 成功，生成的 JAR 包含审查、误报判定、总结三份指令。测试覆盖本机 HTTP 替身、SQLite 旧库升级及重启恢复。真实凭据配置、线上 webhook 登记、部署和第一次真实审查未在此次实现中执行。
