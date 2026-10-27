@@ -39,6 +39,11 @@ demo:
 
 # diff 未就绪时的重试。超过 max-attempts 后留下一条失败概览讨论。
 review:
+  gitlab:
+    base-url: ${GITLAB_BASE_URL:}
+    token: ${GITLAB_TOKEN:}
+    project-id: ${GITLAB_PROJECT_ID:0}
+    request-timeout: 30s
   diff-wait:
     max-attempts: 3
     interval: 2s

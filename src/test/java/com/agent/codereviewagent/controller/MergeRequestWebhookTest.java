@@ -194,6 +194,20 @@ class MergeRequestWebhookTest {
     }
 
     @Test
+    void repeatedModelDraftsArePostedOnlyOnceAndOverviewFindingsStaySeparate() throws Exception {
+        GITLAB.readyWith("abc123");
+        var first = new Reviewer.CommentDraft(null, null, null, "缺陷", null, "响应体没有关闭。");
+        var second = new Reviewer.CommentDraft(null, null, null, "缺陷", null, "锁没有释放。");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(first, first, second));
+
+        postWebhook(openPayload());
+
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body)
+                .containsExactly("响应体没有关闭。", "锁没有释放。");
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(2);
+    }
+
+    @Test
     void aFailedWriteKeepsTheFindingsAlreadyPosted() throws Exception {
         GITLAB.readyWith("abc123");
         GITLAB.throwOnCreateNumber = 2;

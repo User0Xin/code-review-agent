@@ -121,7 +121,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     /** 每条评论只写回一次。没写上的不记为发现，已经写上并保存的不撤回。 */
     private int postDrafts(long projectId, long mergeRequestIid, String headSha, java.util.List<Reviewer.CommentDraft> drafts) {
         int failed = 0;
-        for (Reviewer.CommentDraft draft : drafts) {
+        for (Reviewer.CommentDraft draft : drafts.stream().distinct().toList()) {
             long discussionId;
             try {
                 discussionId = postOne(projectId, mergeRequestIid, headSha, draft);
