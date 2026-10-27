@@ -27,11 +27,12 @@ spec 由工作项纯文本和实际读入的仓库文档组成；合并请求描
 4. 分类仅用 `编码规范`、`缺陷`、`spec`。编码规范包含通用坏味道；缺陷是规范与 spec 尚未写到、但会导致出错或资源泄漏的问题。审查时只记录类别与引用，具体类名由之后的总结决定。
 5. 一个问题输出一条 draft。多个审查类别指向同一问题时合并为一条，类别归 `编码规范`。同一处的不同问题分别输出。用中文解释具体问题、触发条件、影响和建议；保留路径、标识符与错误原文。引用指出实际规范文档和条款、spec 依据或坏味道名；无法引用时用 null。
 6. 可定位的发现使用 diff 中的真实路径和正整数行号。无法挂行时 `newLine`、`oldLine` 都为 null，由服务逐条写成概览讨论。正文直接是一条问题讨论，不追加整次审查综述。
-7. `input.priorFindings` 是历史已写回的发现及回复。已有问题仍有效时保留原讨论；仅在当前 diff 确实消除了该问题时，把它的 `discussionId` 放进 `resolvedDiscussionIds`。已表明无需修改的历史问题不重复输出。行号移动本身不构成新问题。
-8. 输出恰好包含 `drafts` 和 `resolvedDiscussionIds` 的 JSON 对象。无新问题或无待解决讨论时，各自用空数组。每条 draft 恰好包含下例六个字段：
+7. 阅读 `input.priorFindings` 中历史发现的正文、全部回复和 GitLab 的 `resolved` 状态，按整段回复的最终态度判断开发者是否表明无需修改，把相应 `discussionId` 放进 `declinedDiscussionIds`。出现过“不需要修改”字样本身不能确定态度；后续承认问题时以最后态度为准。此处只决定再次审查是否重复提起，误报记录由总结时独立判定。
+8. 已有问题仍有效且未解决时保留原讨论。草稿和某条历史发现表达同一问题，即使文字或行号改变，都通过 `priorDiscussionId` 指向它。已被开发者否定的同一问题保持原讨论，同一路径上的其他问题仍可输出。历史 `resolved` 为 true 的问题再次出现时，输出新草稿并引用旧讨论编号，由服务新开讨论。仅在当前 diff 确实消除某个历史问题时，把已有编号放进 `resolvedDiscussionIds`；未知编号不能引用。行号移动本身不构成新问题。
+9. 输出恰好包含 `drafts`、`resolvedDiscussionIds`、`declinedDiscussionIds` 的 JSON 对象。无相应结果时各自用空数组。每条 draft 包含下例七个字段，新问题的 `priorDiscussionId` 为 null：
 
 ```json
-{"drafts":[{"path":"main.go","newLine":12,"oldLine":null,"category":"缺陷","citation":null,"commentBody":"这里忽略了读取错误，失败时仍返回成功，需先检查错误。"}],"resolvedDiscussionIds":[]}
+{"drafts":[{"path":"main.go","newLine":12,"oldLine":null,"category":"缺陷","citation":null,"commentBody":"这里忽略了读取错误，失败时仍返回成功，需先检查错误。","priorDiscussionId":null}],"resolvedDiscussionIds":[],"declinedDiscussionIds":[]}
 ```
 
 ## 通用坏味道

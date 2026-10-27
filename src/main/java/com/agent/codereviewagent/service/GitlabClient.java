@@ -20,6 +20,10 @@ public interface GitlabClient {
 
     List<String> listReplies(long projectId, long mergeRequestIid, long discussionId);
 
+    default boolean isDiscussionResolved(long projectId, long mergeRequestIid, long discussionId) {
+        return false;
+    }
+
     void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId);
 
     List<String> listFiles(long projectId, String ref);

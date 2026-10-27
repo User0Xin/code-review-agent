@@ -82,6 +82,7 @@ class MergeRequestWebhookTest {
         REVIEWER.calls = 0;
         REVIEWER.findings = Reviewer.ReviewFindings.none();
         REVIEWER.resolvedDiscussionIds = List.of();
+        REVIEWER.declinedDiscussionIds = List.of();
         REVIEWER.lastRequest = null;
         WORK_ITEMS.reset();
         PICKER.reset();
@@ -286,8 +287,9 @@ class MergeRequestWebhookTest {
         postWebhook(openPayload());
         long discussionId = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
         GITLAB.reply(discussionId, "不需要修改");
+        REVIEWER.declinedDiscussionIds = List.of(discussionId);
         REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
-                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "这里还是没检查错误。")));
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "这里还是没检查错误。", discussionId)));
 
         postWebhook(updatePayload("oldsha"));
 
@@ -303,15 +305,38 @@ class MergeRequestWebhookTest {
         postWebhook(openPayload());
         long discussionId = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
         REVIEWER.resolvedDiscussionIds = List.of(discussionId);
+        REVIEWER.findings = Reviewer.ReviewFindings.none();
+        postWebhook(updatePayload("oldsha"));
+        REVIEWER.resolvedDiscussionIds = List.of();
         REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
                 new Reviewer.CommentDraft("main.go", 30, null, "缺陷", null, "错误没有检查。")));
 
         postWebhook(updatePayload("oldsha"));
 
         assertThat(GITLAB.resolved).containsExactly(discussionId);
+        assertThat(REVIEWER.lastRequest.priorFindings()).singleElement()
+                .extracting(Reviewer.PriorFinding::resolved).isEqualTo(true);
         assertThat(findings.findByMergeRequest(9, 3)).hasSize(2);
         assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body)
                 .containsExactly("错误没有检查。", "错误没有检查。");
+    }
+
+    @Test
+    void decliningOneFindingDoesNotHideADifferentProblemInTheSameFile() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
+        postWebhook(openPayload());
+        long discussionId = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
+        GITLAB.reply(discussionId, "不需要修改");
+        REVIEWER.declinedDiscussionIds = List.of(discussionId);
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 9, null, "缺陷", null, "锁没有释放。")));
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(2);
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body).containsExactly("错误没有检查。", "锁没有释放。");
     }
 
     @Test
@@ -648,6 +673,11 @@ class MergeRequestWebhookTest {
         }
 
         @Override
+        public boolean isDiscussionResolved(long projectId, long mergeRequestIid, long discussionId) {
+            return resolved.contains(discussionId);
+        }
+
+        @Override
         public List<String> listFiles(long projectId, String ref) {
             if (filesByRef.containsKey(ref)) {
                 return new ArrayList<>(filesByRef.get(ref).keySet());
@@ -684,13 +714,14 @@ class MergeRequestWebhookTest {
         private int calls;
         private ReviewFindings findings = ReviewFindings.none();
         private List<Long> resolvedDiscussionIds = List.of();
+        private List<Long> declinedDiscussionIds = List.of();
         private ReviewRequest lastRequest;
 
         @Override
         public ReviewFindings review(ReviewRequest request) {
             calls++;
             lastRequest = request;
-            return new ReviewFindings(findings.drafts(), resolvedDiscussionIds);
+            return new ReviewFindings(findings.drafts(), resolvedDiscussionIds, declinedDiscussionIds);
         }
     }
 

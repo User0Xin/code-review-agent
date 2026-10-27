@@ -101,12 +101,15 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         List<Long> resolved = findings.resolvedDiscussionIds() == null
                 ? List.of()
                 : findings.resolvedDiscussionIds();
+        List<Long> declined = findings.declinedDiscussionIds() == null
+                ? List.of()
+                : findings.declinedDiscussionIds();
         int failed = postDrafts(
                 projectId,
                 mergeRequestIid,
                 diffRefs.headSha(),
-                stillOpen(findings.drafts(), existing, priorFindings, resolved));
-        resolveKnownDiscussions(projectId, mergeRequestIid, existing, priorFindings, resolved);
+                stillOpen(findings.drafts(), priorFindings, resolved, declined));
+        resolveKnownDiscussions(projectId, mergeRequestIid, existing, resolved, declined);
         if (failed > 0) {
             fail(projectId, mergeRequestIid, "有 " + failed + " 条没能写回", spec, standards);
             return;
@@ -179,19 +182,20 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                     finding.getOldLine(),
                     finding.getCategory(),
                     finding.getCommentBody(),
-                    gitlabClient.listReplies(projectId, mergeRequestIid, discussionId)));
+                    gitlabClient.listReplies(projectId, mergeRequestIid, discussionId),
+                    gitlabClient.isDiscussionResolved(projectId, mergeRequestIid, discussionId)));
         }
         return prior;
     }
 
     /** 仍开着的同一问题，以及作者已表明无需修改的问题，不再另开讨论。行号变化不算新问题。 */
     private static List<Reviewer.CommentDraft> stillOpen(List<Reviewer.CommentDraft> drafts,
-                                                         List<FindingEntity> existing,
                                                          List<Reviewer.PriorFinding> priorFindings,
-                                                         List<Long> resolved) {
+                                                         List<Long> resolved,
+                                                         List<Long> declined) {
         List<Reviewer.CommentDraft> kept = new ArrayList<>();
         for (Reviewer.CommentDraft draft : drafts) {
-            if (!repeatsOpenOrDeclined(draft, existing, priorFindings, resolved)) {
+            if (!repeatsOpenOrDeclined(draft, priorFindings, resolved, declined)) {
                 kept.add(draft);
             }
         }
@@ -199,41 +203,19 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     }
 
     private static boolean repeatsOpenOrDeclined(Reviewer.CommentDraft draft,
-                                                 List<FindingEntity> existing,
                                                  List<Reviewer.PriorFinding> priorFindings,
-                                                 List<Long> resolved) {
-        for (FindingEntity finding : existing) {
-            if (finding.getDiscussionId() == null || resolved.contains(finding.getDiscussionId())) {
-                continue;
-            }
-            if (!samePathAndCategory(draft, finding)) {
-                continue;
-            }
-            if (sameBody(draft, finding) || declined(priorFindings, finding.getDiscussionId())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean samePathAndCategory(Reviewer.CommentDraft draft, FindingEntity finding) {
-        return java.util.Objects.equals(draft.path(), finding.getPath())
-                && java.util.Objects.equals(draft.category(), finding.getCategory());
-    }
-
-    private static boolean sameBody(Reviewer.CommentDraft draft, FindingEntity finding) {
-        return java.util.Objects.equals(draft.commentBody(), finding.getCommentBody());
-    }
-
-    private static boolean declined(List<Reviewer.PriorFinding> priorFindings, long discussionId) {
+                                                 List<Long> resolved,
+                                                 List<Long> declined) {
         for (Reviewer.PriorFinding prior : priorFindings) {
-            if (prior.discussionId() != discussionId || prior.replies() == null) {
+            if (!java.util.Objects.equals(draft.path(), prior.path())
+                    || !java.util.Objects.equals(draft.category(), prior.category())) {
                 continue;
             }
-            for (String reply : prior.replies()) {
-                if (reply != null && reply.contains("不需要修改")) {
-                    return true;
-                }
+            boolean sameProblem = java.util.Objects.equals(draft.commentBody(), prior.commentBody())
+                    || java.util.Objects.equals(draft.priorDiscussionId(), prior.discussionId());
+            if (sameProblem && (declined.contains(prior.discussionId())
+                    || (!prior.resolved() && !resolved.contains(prior.discussionId())))) {
+                return true;
             }
         }
         return false;
@@ -243,10 +225,10 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private void resolveKnownDiscussions(long projectId,
                                          long mergeRequestIid,
                                          List<FindingEntity> existing,
-                                         List<Reviewer.PriorFinding> priorFindings,
-                                         List<Long> resolved) {
+                                         List<Long> resolved,
+                                         List<Long> declined) {
         for (Long discussionId : resolved) {
-            if (discussionId == null || declined(priorFindings, discussionId)) {
+            if (discussionId == null || declined.contains(discussionId)) {
                 continue;
             }
             boolean known = existing.stream().anyMatch(finding -> discussionId.equals(finding.getDiscussionId()));

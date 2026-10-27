@@ -123,6 +123,12 @@ public class RestGitlabClient implements GitlabClient {
     }
 
     @Override
+    public boolean isDiscussionResolved(long projectId, long mergeRequestIid, long discussionId) {
+        return discussion(projectId, mergeRequestIid, discussionId)
+                .path("notes").path(0).path("resolved").asBoolean();
+    }
+
+    @Override
     public void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId) {
         JsonNode discussion = discussion(projectId, mergeRequestIid, discussionId);
         send("PUT", mergeRequest(projectId, mergeRequestIid) + "/discussions/"

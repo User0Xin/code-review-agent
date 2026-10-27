@@ -25,7 +25,8 @@ public interface Reviewer {
             Integer oldLine,
             String category,
             String commentBody,
-            List<String> replies) {
+            List<String> replies,
+            boolean resolved) {
     }
 
     /**
@@ -38,10 +39,20 @@ public interface Reviewer {
             Integer oldLine,
             String category,
             String citation,
-            String commentBody) {
+            String commentBody,
+            Long priorDiscussionId) {
+
+        public CommentDraft(String path, Integer newLine, Integer oldLine, String category,
+                            String citation, String commentBody) {
+            this(path, newLine, oldLine, category, citation, commentBody, null);
+        }
     }
 
-    record ReviewFindings(List<CommentDraft> drafts, List<Long> resolvedDiscussionIds) {
+    record ReviewFindings(List<CommentDraft> drafts, List<Long> resolvedDiscussionIds, List<Long> declinedDiscussionIds) {
+
+        public ReviewFindings(List<CommentDraft> drafts, List<Long> resolvedDiscussionIds) {
+            this(drafts, resolvedDiscussionIds, List.of());
+        }
 
         public static ReviewFindings none() {
             return new ReviewFindings(List.of(), List.of());

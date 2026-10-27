@@ -49,6 +49,7 @@ class GitlabTransportWebhookTest {
     private static volatile boolean failSecond;
     private static volatile String reply = "";
     private static volatile boolean discussionOnSecondPage;
+    private static volatile boolean firstDiscussionResolved;
     private static volatile List<Reviewer.CommentDraft> drafts = List.of();
     private static volatile List<Long> resolved = List.of();
 
@@ -71,6 +72,7 @@ class GitlabTransportWebhookTest {
         failSecond = false;
         reply = "";
         discussionOnSecondPage = false;
+        firstDiscussionResolved = false;
         drafts = List.of();
         resolved = List.of();
         jdbc.update("DELETE FROM finding");
@@ -120,6 +122,35 @@ class GitlabTransportWebhookTest {
             assertThat(received.body().path("resolved").asBoolean()).isTrue();
         });
         assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+    }
+
+    @Test
+    void aProblemReturningAfterAnEarlierWebhookResolvedItOpensANewDiscussion() throws Exception {
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 12, null, "缺陷", null, "错误没有处理。"));
+        webhook("open");
+        drafts = List.of();
+        resolved = List.of(101L);
+        discussionOnSecondPage = true;
+
+        webhook("update");
+
+        assertThat(firstDiscussionResolved).isTrue();
+        assertThat(POSTED).hasSize(1);
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 30, null, "缺陷", null, "错误没有处理。"));
+        resolved = List.of();
+
+        webhook("update");
+
+        assertThat(POSTED).hasSize(2);
+        assertThat(POSTED).extracting(posted -> posted.path("body").asText())
+                .containsExactly("错误没有处理。", "错误没有处理。");
+        assertThat(findings.findByMergeRequest(9, 3)).hasSize(2)
+                .extracting(finding -> finding.getDiscussionId()).containsExactly(101L, 102L);
+        assertThat(RECEIVED).filteredOn(received -> received.method().equals("PUT"))
+                .singleElement().satisfies(received ->
+                        assertThat(received.path()).endsWith("/discussions/thread-101"));
+        assertThat(RECEIVED).noneSatisfy(received -> assertThat(received.method()).isEqualTo("DELETE"));
     }
 
     @Test
@@ -198,11 +229,15 @@ class GitlabTransportWebhookTest {
                 response = "[]";
             }
             else {
-                response = "[{\"id\":\"thread-101\",\"notes\":[{\"id\":101,\"body\":\"发现\"},"
+                response = "[{\"id\":\"thread-101\",\"notes\":[{\"id\":101,\"body\":\"发现\",\"resolved\":"
+                        + firstDiscussionResolved + "},"
                         + "{\"id\":201,\"body\":" + JSON.writeValueAsString(reply) + "}]}]";
             }
         }
-        else if (path.endsWith("/discussions/thread-101") && method.equals("PUT")) { response = "{}"; }
+        else if (path.endsWith("/discussions/thread-101") && method.equals("PUT")) {
+            firstDiscussionResolved = body.path("resolved").asBoolean();
+            response = "{}";
+        }
         else { status = 404; response = "{}"; }
         byte[] output = response.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");

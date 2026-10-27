@@ -33,14 +33,23 @@ public class ModelReviewer implements Reviewer {
                         && (draft.path() == null || draft.path().isBlank()))) {
                 throw new IllegalStateException("审查模型返回的发现字段不符合约定");
             }
+            if (draft.priorDiscussionId() != null) {
+                requireKnownDiscussion(request, draft.priorDiscussionId());
+            }
             accepted.add(draft);
         }
         for (Long discussionId : result.resolvedDiscussionIds()) {
-            if (discussionId == null || discussionId <= 0
-                    || request.priorFindings().stream().noneMatch(prior -> prior.discussionId() == discussionId)) {
-                throw new IllegalStateException("审查模型返回了未知的已有讨论编号");
-            }
+            requireKnownDiscussion(request, discussionId);
         }
-        return new ReviewFindings(List.copyOf(accepted), List.copyOf(result.resolvedDiscussionIds()));
+        List<Long> declined = result.declinedDiscussionIds() == null ? List.of() : result.declinedDiscussionIds();
+        for (Long discussionId : declined) { requireKnownDiscussion(request, discussionId); }
+        return new ReviewFindings(List.copyOf(accepted), List.copyOf(result.resolvedDiscussionIds()), List.copyOf(declined));
+    }
+
+    private static void requireKnownDiscussion(ReviewRequest request, Long discussionId) {
+        if (discussionId == null || discussionId <= 0
+                || request.priorFindings().stream().noneMatch(prior -> prior.discussionId() == discussionId)) {
+            throw new IllegalStateException("审查模型返回了未知的已有讨论编号");
+        }
     }
 }
