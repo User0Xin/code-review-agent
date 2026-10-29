@@ -128,10 +128,22 @@ export class JobQueue {
 
   recover(): void {
     this.connection
-      .prepare(
-        "UPDATE jobs SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'queued' END,locked_at=NULL,available_at=?,error='服务重启，任务已恢复' WHERE status='running'",
-      )
-      .run(Date.now());
+      .transaction(() => {
+        const now = Date.now();
+        this.connection
+          .prepare(
+            `UPDATE review_runs SET execution_status='failed',completed_at=?,error='服务重启，任务重试次数已耗尽'
+           WHERE execution_status='running' AND superseded_at IS NULL
+           AND id IN (SELECT 'run:' || id FROM jobs WHERE kind='review' AND status='running' AND attempts>=max_attempts)`,
+          )
+          .run(new Date(now).toISOString());
+        this.connection
+          .prepare(
+            "UPDATE jobs SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'queued' END,locked_at=NULL,available_at=?,error=CASE WHEN attempts>=max_attempts THEN '服务重启，任务重试次数已耗尽' ELSE '服务重启，任务已恢复' END WHERE status='running'",
+          )
+          .run(now);
+      })
+      .immediate();
     this.changed();
   }
 
