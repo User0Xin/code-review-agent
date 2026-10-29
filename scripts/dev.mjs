@@ -39,6 +39,7 @@ build.on("exit", (code) => {
   for (const c of children)
     c.on("exit", (code) => {
       stop();
-      process.exitCode = code || 0;
+      // Cleanup can exit successfully after the other service has already failed.
+      process.exitCode = process.exitCode || code || 0;
     });
 });
