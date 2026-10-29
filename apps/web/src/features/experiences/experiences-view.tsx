@@ -15,6 +15,7 @@ export function ExperiencesView({ project }: { project: Project }) {
   const q = useQuery({
     queryKey: ["experiences", project.id],
     queryFn: () => api<Experience[]>(`/projects/${project.id}/experiences`),
+    refetchInterval: 10_000,
   });
   const generate = useMutation({
     mutationFn: () => post<Job>(`/projects/${project.id}/summarize`),

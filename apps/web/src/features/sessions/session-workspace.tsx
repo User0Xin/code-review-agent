@@ -91,6 +91,7 @@ export function SessionWorkspace({
   const q = useQuery({
     queryKey: ["session", id],
     queryFn: () => api<SessionDetail>(`/sessions/${id}`),
+    refetchInterval: 10_000,
   });
   const query = useQueryClient();
   const notify = useUi((s) => s.notify);
