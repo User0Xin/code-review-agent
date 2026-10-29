@@ -81,7 +81,7 @@ export default function App() {
     setProjectOpen(true);
   };
   const sessionWorkspaceVisible =
-    !workspace.isPending && !workspace.error && ui.view === "workspace" && session && project;
+    !workspace.isPending && ui.view === "workspace" && session && project;
   // Overlay navigation never occupies a layout column. Keep its launcher
   // mounted behind the dialog so closing it can restore keyboard focus.
   const navigationCollapsed = compactNavigation || ui.navigationCollapsed;
@@ -303,7 +303,7 @@ export default function App() {
             <LoaderCircle className="animate-spin" />
             正在读取工作区…
           </div>
-        ) : workspace.error ? (
+        ) : workspace.error && !data ? (
           <Empty className="empty-panel">
             <CircleAlert size={36} />
             <h1>无法连接工作区</h1>
@@ -321,6 +321,19 @@ export default function App() {
         ) : (
           data && (
             <>
+              {workspace.error && (
+                <div role="alert" className="flex shrink-0 items-center gap-3 border-b px-4 py-2">
+                  <p className="field-error">工作区刷新失败：{workspace.error.message}</p>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    disabled={workspace.isFetching}
+                    onClick={() => void workspace.refetch()}
+                  >
+                    重试
+                  </Button>
+                </div>
+              )}
               {ui.view === "models" ? (
                 <ModelsView models={data.models} onEdit={openModel} />
               ) : ui.view === "jobs" ? (

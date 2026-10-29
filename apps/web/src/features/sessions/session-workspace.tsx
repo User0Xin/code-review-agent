@@ -137,14 +137,14 @@ export function SessionWorkspace({
       </div>
     );
   }
-  if (q.error) {
+  if (!q.data) {
     return (
       <div className="session-workspace">
         {navigationToggle && <div className="workspace-toolbar">{navigationToggle}</div>}
         <Empty className="empty-panel">
           <CircleAlert />
           <h2>会话暂时无法读取</h2>
-          <p>{q.error.message}</p>
+          <p>{q.error?.message}</p>
           <Button
             variant="outline"
             onClick={() => {
@@ -262,6 +262,19 @@ export function SessionWorkspace({
               </div>
             </header>
 
+            {q.error && (
+              <div role="alert" className="flex shrink-0 items-center gap-3 border-b px-4 py-2">
+                <p className="field-error">会话刷新失败：{q.error.message}</p>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={q.isFetching}
+                  onClick={() => void q.refetch()}
+                >
+                  重新加载
+                </Button>
+              </div>
+            )}
             <Tabs defaultValue="conversation" className="conversation-tabs">
               <div className="session-tabbar">
                 <TabsList variant="line">
