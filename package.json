@@ -13,7 +13,7 @@
     "typecheck": "pnpm --filter @review/contracts build && pnpm -r typecheck",
     "test": "pnpm --filter @review/contracts build && pnpm --filter @review/server test",
     "check:dependencies": "node scripts/check-dependencies.mjs",
-    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build && pnpm check:dependencies",
+    "check": "pnpm --filter @review/contracts build && pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build && pnpm check:dependencies",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"apps/**/*.{ts,tsx,json,css,html}\" \"packages/**/*.{ts,json}\" \"scripts/*.mjs\" \"*.{json,mjs}\" \"docs/**/*.md\" README.md GLOSSARY.md",
