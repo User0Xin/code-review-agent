@@ -94,13 +94,7 @@ export class EventService {
       });
       return;
     }
-    let session = await this.context.importPullRequest(projectId, event.number);
-    if (event.type === "closed") {
-      session = this.context.saveSnapshot(project, {
-        ...session,
-        state: event.state === "merged" ? "merged" : "closed",
-      });
-    }
+    const session = await this.context.importPullRequest(projectId, event.number);
     if (event.type === "pr" && session.state === "open" && project.autoReview) {
       this.context.store.jobs.enqueue(
         "review",

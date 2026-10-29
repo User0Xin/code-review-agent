@@ -581,6 +581,7 @@ describe("events, discussion, and knowledge", () => {
     });
     expect(f.store.sessions.list()[0]!.ciStatus).toBe("success");
     expect(f.store.runs.list()).toHaveLength(1);
+    f.setSnapshot({ state: "merged" });
     await f.workflow.acceptEvent(project.id, {
       ...event,
       id: "closed",
@@ -589,6 +590,49 @@ describe("events, discussion, and knowledge", () => {
     });
     expect(f.store.sessions.list()[0]!.state).toBe("merged");
   });
+
+  it.each(["closed", "merged"] as const)(
+    "keeps the fetched open state and history after a delayed %s event",
+    async (state) => {
+      const f = fixture();
+      const { session, run } = await reviewed(f);
+      await f.workflow.acceptEvent(project.id, {
+        id: "delayed-close",
+        type: "closed",
+        repository: project.repository,
+        number: session.number,
+        state,
+      });
+      expect(f.store.sessions.list()).toHaveLength(1);
+      expect(f.store.sessions.get(session.id)?.state).toBe("open");
+      expect(f.store.runs.get(run.id)).toEqual(run);
+      f.workflow.queueReview(session.id);
+      await f.worker.drain();
+      expect(f.store.runs.listBySession(session.id)).toHaveLength(2);
+      expect(f.agent.review).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["closed", "merged"] as const)(
+    "keeps the fetched %s state and prevents another review",
+    async (state) => {
+      const f = fixture();
+      const { session, run } = await reviewed(f);
+      f.setSnapshot({ state });
+      await f.workflow.acceptEvent(project.id, {
+        id: "current-close",
+        type: "closed",
+        repository: project.repository,
+        number: session.number,
+        state,
+      });
+      expect(f.store.sessions.list()).toHaveLength(1);
+      expect(f.store.sessions.get(session.id)?.state).toBe(state);
+      expect(f.store.runs.get(run.id)?.status).toBe("superseded");
+      expect(() => f.workflow.queueReview(session.id)).toThrow();
+      expect(f.agent.review).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps chat private, publishes explicit user text, and ignores its webhook echo", async () => {
     const f = fixture();
