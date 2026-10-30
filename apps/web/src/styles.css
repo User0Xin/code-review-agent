@@ -1355,17 +1355,35 @@
   background: rgb(var(--bg-default));
   overflow: hidden;
 }
-.file-diff > header {
+.file-diff > summary {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: var(--font-small);
   padding: 12px;
   background: rgb(var(--bg-subtle));
+  cursor: pointer;
+  list-style: none;
+}
+.file-diff > summary::-webkit-details-marker {
+  display: none;
+}
+.file-diff > summary:hover {
+  background: rgb(var(--bg-emphasis));
+}
+.file-diff > summary:focus-visible {
+  outline: 2px solid rgb(var(--border-emphasis));
+  outline-offset: -2px;
+}
+.file-diff[open] > summary {
   border-bottom: 1px solid var(--border);
 }
-.file-diff > header code {
+.file-diff[open] > summary .file-diff-caret {
+  transform: rotate(90deg);
+}
+.file-diff > summary code {
   flex: 1;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .diff-add {

@@ -1,5 +1,5 @@
 import type { ChangedFile } from "@review/contracts";
-import { FileCode2 } from "lucide-react";
+import { ChevronRight, FileCode2 } from "lucide-react";
 import { useMemo } from "react";
 import { Diff, Hunk, parseDiff } from "react-diff-view";
 import "react-diff-view/style/index.css";
@@ -30,13 +30,14 @@ function FileDiff({ file }: { file: ChangedFile }) {
     }
   }, [file]);
   return (
-    <section className="file-diff">
-      <header>
-        <FileCode2 size={14} />
+    <details className="file-diff" open>
+      <summary>
+        <ChevronRight size={14} className="file-diff-caret" aria-hidden="true" />
+        <FileCode2 size={14} aria-hidden="true" />
         <code>{file.path}</code>
         <span className="diff-add">+{file.additions}</span>
         <span className="diff-remove">−{file.deletions}</span>
-      </header>
+      </summary>
       <div className="diff-content">
         {parsed.length ? (
           parsed.map((diff, i) => (
@@ -52,6 +53,6 @@ function FileDiff({ file }: { file: ChangedFile }) {
           </p>
         )}
       </div>
-    </section>
+    </details>
   );
 }
