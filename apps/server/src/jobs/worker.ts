@@ -1,3 +1,5 @@
+import { DomainError } from "../common/domain-error.js";
+import { IntegrationError } from "../integrations/integration-error.js";
 import type { Store } from "../store.js";
 import { errorText } from "../workflow/utils.js";
 import type { Workflow } from "../workflow/workflow.js";
@@ -45,7 +47,11 @@ export class Worker {
           await this.workflow.processJob(job);
           this.store.jobs.complete(job.id);
         } catch (error) {
-          this.store.jobs.fail(job.id, errorText(error));
+          const retryable =
+            error instanceof DomainError || error instanceof IntegrationError
+              ? error.retryable
+              : true;
+          this.store.jobs.fail(job.id, errorText(error), retryable);
         }
       }
     })();

@@ -189,6 +189,117 @@ async function summaryEvidence(f: ReturnType<typeof fixture>) {
 }
 
 describe("review workflow", () => {
+  it("rejects a queued publication when its repository token was revoked", async () => {
+    const f = fixture();
+    const { run } = await reviewed(f);
+    const publication = f.workflow.queuePublish(run.id);
+    const revisionReads = vi.mocked(f.repository.getRevision!).mock.calls.length;
+    f.store.vault.set(`repo:${project.id}`, "");
+
+    await expect(f.workflow.processJob(publication)).rejects.toThrow("发布需要仓库访问令牌");
+
+    expect(vi.mocked(f.repository.getRevision!).mock.calls).toHaveLength(revisionReads);
+    expect(f.repository.getComments).not.toHaveBeenCalled();
+    expect(f.repository.publishComment).not.toHaveBeenCalled();
+    expect(f.store.publications.list()).toEqual([]);
+    expect(f.store.runs.get(run.id)?.status).toBe("completed");
+  });
+  it("keeps a completed publication idempotent after repository credentials are revoked", async () => {
+    const f = fixture();
+    const { run } = await reviewed(f);
+    const publication = f.workflow.queuePublish(run.id);
+    await f.worker.drain();
+    expect(f.store.runs.get(run.id)?.publishedAt).toBeTruthy();
+    const comments = structuredClone(f.comments);
+    f.store.vault.set(`repo:${project.id}`, "");
+
+    await expect(f.workflow.processJob(publication)).resolves.toBeUndefined();
+
+    expect(f.comments).toEqual(comments);
+  });
+  it("rejects a queued external message when its repository token was revoked", async () => {
+    const f = fixture();
+    const session = await f.workflow.importPullRequest(project.id, 1);
+    const reply = f.workflow.queueMessage(session.id, "Please check this finding", "external");
+    const snapshotReads = vi.mocked(f.repository.getPullRequest).mock.calls.length;
+    f.store.vault.set(`repo:${project.id}`, "");
+
+    await expect(f.workflow.processJob(reply)).rejects.toThrow("发布需要仓库访问令牌");
+
+    expect(vi.mocked(f.repository.getPullRequest).mock.calls).toHaveLength(snapshotReads);
+    expect(f.repository.getComments).not.toHaveBeenCalled();
+    expect(f.repository.publishComment).not.toHaveBeenCalled();
+    expect(f.store.publications.list()).toEqual([]);
+  });
+  it("does not publish with a token revoked while reconciling remote comments", async () => {
+    const f = fixture();
+    const { run } = await reviewed(f);
+    const publication = f.workflow.queuePublish(run.id);
+    vi.mocked(f.repository.getComments).mockImplementationOnce(async () => {
+      f.store.vault.set(`repo:${project.id}`, "");
+      return [];
+    });
+
+    await expect(f.workflow.processJob(publication)).rejects.toThrow("发布需要仓库访问令牌");
+
+    expect(f.repository.publishComment).not.toHaveBeenCalled();
+    expect(f.comments).toEqual([]);
+    expect(f.store.publications.list()).toMatchObject([{ state: "pending" }]);
+    expect(f.store.runs.get(run.id)?.publishedAt).toBeUndefined();
+  });
+  it("completes public review but stops automatic publication without a repository token", async () => {
+    const f = fixture();
+    f.store.projects.save({ ...project, autoPublish: true });
+    f.store.vault.set(`repo:${project.id}`, "");
+
+    const { run } = await reviewed(f);
+
+    expect(run.status).toBe("completed");
+    expect(f.store.jobs.list().find((job) => job.kind === "publish")).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      error: expect.stringContaining("发布需要仓库访问令牌"),
+    });
+    expect(f.repository.publishComment).not.toHaveBeenCalled();
+    expect(f.store.publications.list()).toEqual([]);
+  });
+  it("rejects queued feedback before generating a reply after credentials are revoked", async () => {
+    const f = fixture();
+    const { run, finding } = await reviewed(f);
+    f.workflow.queuePublish(run.id);
+    await f.worker.drain();
+    const published = f.store.findings.get(finding.id)!;
+    await f.workflow.acceptEvent(project.id, {
+      id: "feedback-with-revoked-token",
+      type: "reply",
+      repository: project.repository,
+      number: 1,
+      body: "The caller already validates this",
+      commentId: "review:human-feedback",
+      threadId: published.remoteThreadId,
+    });
+    const reply = f.store.jobs.list().find((job) => job.kind === "reply")!;
+    const comments = structuredClone(f.comments);
+    f.store.vault.set(`repo:${project.id}`, "");
+
+    await expect(f.workflow.processJob(reply)).rejects.toThrow("发布需要仓库访问令牌");
+
+    expect(f.agent.reply).not.toHaveBeenCalled();
+    expect(f.comments).toEqual(comments);
+  });
+  it("keeps an already delivered external message idempotent without credentials", async () => {
+    const f = fixture();
+    const session = await f.workflow.importPullRequest(project.id, 1);
+    const reply = f.workflow.queueMessage(session.id, "Please check this finding", "external");
+    await f.worker.drain();
+    const comments = structuredClone(f.comments);
+    expect(comments).toHaveLength(1);
+    f.store.vault.set(`repo:${project.id}`, "");
+
+    await expect(f.workflow.processJob(reply)).resolves.toBeUndefined();
+
+    expect(f.comments).toEqual(comments);
+  });
   it("freezes review inputs, validates positions and grounds evidence, reporting partial coverage", async () => {
     const f = fixture();
     const experience: Experience = {

@@ -102,7 +102,7 @@ export class AiReviewAgent implements AgentPort {
       token = await this.chatgptAccessToken(connection.chatgptAccountId);
     } catch (error) {
       if (error instanceof DomainError) {
-        throw new IntegrationError(error.message);
+        throw new IntegrationError(error.message, error.retryable);
       }
       throw error;
     }

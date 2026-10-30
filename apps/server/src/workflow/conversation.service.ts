@@ -47,13 +47,19 @@ export class ConversationService {
   }
 
   async reply(job: JobOfKind<"reply">): Promise<void> {
+    const session = this.context.session(job.payload.sessionId);
+    const messageId = `message:${job.id}:${job.payload.mode === "publish-user" ? "user" : "assistant"}`;
+    const storedMessage = this.context.store.messages.get(messageId);
+    if (storedMessage?.remoteId) {
+      return;
+    }
+    this.context.requirePublicationToken(session.projectId);
     if (job.payload.mode === "publish-user") {
       const { sessionId, findingId } = job.payload;
       const finding = findingId ? this.publishedFinding(findingId, sessionId) : undefined;
-      const session = this.context.session(sessionId);
       const project = this.context.project(session.projectId);
       const snapshot = await this.context.importPullRequest(project.id, session.number);
-      const message = requireEntity(this.context.store.messages.get(`message:${job.id}:user`));
+      const message = requireEntity(storedMessage);
       await this.publish(message, project, snapshot, finding);
       return;
     }
@@ -61,8 +67,7 @@ export class ConversationService {
     const { sessionId, findingId, body, sourceMessageId } = job.payload;
     const finding = this.publishedFinding(findingId, sessionId);
     const input = await this.context.liveInput(sessionId);
-    const messageId = `message:${job.id}:assistant`;
-    let message = this.context.store.messages.get(messageId);
+    let message = storedMessage;
     if (!message) {
       const response = await this.context.agent.reply({ ...input, finding, message: body });
       const generated: Message = {

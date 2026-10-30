@@ -433,6 +433,37 @@ describe("ChatGPT OAuth", () => {
     expect(JSON.stringify(failed)).not.toContain("private provider detail");
   });
 
+  it.each([
+    "unsupported_country_region_territory",
+    { code: "unsupported_country_region_territory" },
+  ])("reports unsupported server regions safely without retrying (%j)", async (providerError) => {
+    const fixture = setup();
+    const account = await fixture.login();
+    fixture.expire(account.id);
+    const savedCredentials = fixture.store.vault.get(`chatgpt:${account.id}`);
+    fixture.setTokenHook(async () =>
+      json({ error: providerError, error_description: `private detail ${refreshToken}` }, 403),
+    );
+    const message = "服务器所在地区不受 OpenAI 支持，无法完成 ChatGPT 授权，请部署到受支持的地区";
+    await expect(fixture.service.accessToken(account.id)).rejects.toMatchObject({
+      message,
+      retryable: false,
+    });
+    expect(fixture.store.vault.get(`chatgpt:${account.id}`)).toBe(savedCredentials);
+    const { attempt, authorization } = await fixture.start(account.id);
+    await fixture.callback(authorization);
+    const failed = fixture.service.loginStatus(attempt.id);
+    expect(failed).toMatchObject({ status: "failed", error: message });
+    for (const secret of ["private detail", refreshToken, "private-authorization-code"]) {
+      expect(JSON.stringify(failed)).not.toContain(secret);
+    }
+    expect(fixture.requests.filter((request) => request.url.endsWith("/oauth/token"))).toHaveLength(
+      3,
+    );
+    fixture.setTokenHook(async () => json({ error: "other_forbidden" }, 403));
+    await expect(fixture.service.accessToken(account.id)).rejects.toThrow("权限不足");
+  });
+
   it("cancels an older reauthorization for the same account", async () => {
     const fixture = setup();
     const account = await fixture.login();

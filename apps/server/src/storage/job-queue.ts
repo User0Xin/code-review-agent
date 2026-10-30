@@ -108,7 +108,7 @@ export class JobQueue {
     this.changed();
   }
 
-  fail(id: string, error: string | Error): void {
+  fail(id: string, error: string | Error, retryable = true): void {
     const job = this.get(id);
     if (!job) {
       return;
@@ -116,7 +116,7 @@ export class JobQueue {
     this.db
       .update(jobs)
       .set({
-        status: job.attempts >= job.maxAttempts ? "failed" : "queued",
+        status: !retryable || job.attempts >= job.maxAttempts ? "failed" : "queued",
         lockedAt: null,
         error: this.vault.redact(error instanceof Error ? error.message : error),
         availableAt: Date.now() + Math.min(60_000, 1000 * 2 ** job.attempts),

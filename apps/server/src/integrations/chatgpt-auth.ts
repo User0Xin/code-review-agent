@@ -582,16 +582,22 @@ export class ChatGptAuthService {
     parameters: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<TokenResponse> {
+    const requestFailureMessage = "ChatGPT 授权请求失败，请重新登录或检查网络";
     try {
-      const response = await this.fetcher(tokenEndpoint, {
-        method: "POST",
-        redirect: "error",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(parameters),
-        signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
-          : AbortSignal.timeout(this.requestTimeoutMs),
-      });
+      let response: Response;
+      try {
+        response = await this.fetcher(tokenEndpoint, {
+          method: "POST",
+          redirect: "error",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(parameters),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
+            : AbortSignal.timeout(this.requestTimeoutMs),
+        });
+      } catch {
+        throw new DomainError(requestFailureMessage, "invalid-operation", true);
+      }
       if (!response.ok) {
         const failure = z
           .object({ error: z.union([z.string(), z.object({ code: z.string() })]) })
@@ -601,6 +607,11 @@ export class ChatGptAuthService {
             ? failure.data.error
             : failure.data.error.code
           : undefined;
+        if (code === "unsupported_country_region_territory") {
+          throw new DomainError(
+            "服务器所在地区不受 OpenAI 支持，无法完成 ChatGPT 授权，请部署到受支持的地区",
+          );
+        }
         if (parameters.grant_type === "refresh_token" && code && unusableRefreshErrors.has(code)) {
           throw new RejectedGrantError("ChatGPT 授权已失效，请重新登录");
         }
@@ -608,7 +619,7 @@ export class ChatGptAuthService {
       }
       return tokenSchema.parse(await response.json());
     } catch (error) {
-      throw this.safeError(error, "ChatGPT 授权请求失败，请重新登录或检查网络");
+      throw this.safeError(error, requestFailureMessage);
     }
   }
 
@@ -709,9 +720,13 @@ export class ChatGptAuthService {
       return new DomainError("ChatGPT 权限不足，请检查账号授权与额度设置");
     }
     if (status === 429) {
-      return new DomainError("ChatGPT 请求受限或额度不足，请稍后重试");
+      return new DomainError("ChatGPT 请求受限或额度不足，请稍后重试", "invalid-operation", true);
     }
-    return new DomainError(`ChatGPT ${operation}失败（HTTP ${status}），请稍后重试`);
+    return new DomainError(
+      `ChatGPT ${operation}失败（HTTP ${status}），请稍后重试`,
+      "invalid-operation",
+      status === 408 || (status >= 500 && status < 600),
+    );
   }
 
   private safeError(error: unknown, fallback: string): DomainError {

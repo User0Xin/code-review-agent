@@ -35,6 +35,13 @@ export class WorkflowContext {
     }
     return project;
   }
+  requirePublicationToken(projectId: string): string {
+    const token = this.store.vault.get(`repo:${projectId}`).trim();
+    if (!token) {
+      throw new DomainError("发布需要仓库访问令牌，请在仓库配置中填写具有评论权限的令牌");
+    }
+    return token;
+  }
   session(id: string): Session {
     const session = this.store.sessions.get(id);
     if (!session) {

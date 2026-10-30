@@ -21,12 +21,13 @@ export class PublicationService {
   constructor(private readonly context: WorkflowContext) {}
   async publishRun(runId: string): Promise<void> {
     const run = this.context.run(runId);
-    if (run.status === "superseded") {
+    if (run.status === "superseded" || run.publishedAt) {
       return;
     }
     if (run.status !== "completed" || !run.snapshot) {
       throw new DomainError("审查未完成，无法发布");
     }
+    this.context.requirePublicationToken(run.projectId);
     if (!(await this.context.isCurrent(run))) {
       return;
     }
@@ -109,7 +110,7 @@ export class PublicationService {
     }
     const comments = await this.context.repository.getComments(
       project,
-      this.context.store.vault.get(`repo:${project.id}`),
+      this.context.requirePublicationToken(project.id),
       requireEntity(run.snapshot).number,
     );
     for (const publication of previous.reverse()) {
@@ -171,14 +172,19 @@ export class PublicationService {
       };
     }
     const snapshot = requireEntity(publication.snapshot);
-    const token = this.context.store.vault.get(`repo:${project.id}`);
+    const token = this.context.requirePublicationToken(project.id);
     const comments = await this.context.repository.getComments(project, token, snapshot.number);
     let remote = comments.find((comment) => comment.body.includes(publication.marker));
     if (!remote) {
-      remote = await this.context.repository.publishComment(project, token, snapshot, {
-        ...publication.target,
-        body: `${publication.body}\n\n${publication.marker}`,
-      });
+      remote = await this.context.repository.publishComment(
+        project,
+        this.context.requirePublicationToken(project.id),
+        snapshot,
+        {
+          ...publication.target,
+          body: `${publication.body}\n\n${publication.marker}`,
+        },
+      );
     }
     this.context.store.publications.save({
       ...publication,

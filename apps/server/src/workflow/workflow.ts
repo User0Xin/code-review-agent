@@ -60,6 +60,7 @@ export class Workflow {
     if (run.status !== "completed" || run.headSha !== session.headSha || session.state !== "open") {
       throw new DomainError("只能发布当前提交上已完成的审查");
     }
+    this.context.requirePublicationToken(run.projectId);
     return this.store.jobs.enqueue("publish", { runId }, `publish:${runId}`);
   }
 
@@ -79,6 +80,9 @@ export class Workflow {
     }
     if (visibility === "external" && findingId && (!finding?.remoteId || !finding.publishedAt)) {
       throw new DomainError("外部回复必须选择已经发布的原评论");
+    }
+    if (visibility === "external") {
+      this.context.requirePublicationToken(session.projectId);
     }
     return this.store.transaction(() => {
       const key = `message:${randomUUID()}`;
@@ -108,6 +112,18 @@ export class Workflow {
       { projectId },
       `summary:${projectId}:${randomUUID()}`,
     );
+  }
+
+  retryJob(id: string): Job {
+    const job = this.store.jobs.get(id);
+    if (job?.status === "failed") {
+      if (job.kind === "publish") {
+        this.context.requirePublicationToken(this.context.run(job.payload.runId).projectId);
+      } else if (job.kind === "reply") {
+        this.context.requirePublicationToken(this.context.session(job.payload.sessionId).projectId);
+      }
+    }
+    return this.store.jobs.retry(id);
   }
 
   async processJob(job: Job): Promise<void> {

@@ -46,6 +46,6 @@ export class WorkspaceController {
 
   @Post("jobs/:id/retry")
   retry(@Param("id") id: string) {
-    return this.store.jobs.retry(id);
+    return this.workflow.retryJob(id);
   }
 }

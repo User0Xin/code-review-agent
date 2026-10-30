@@ -1,4 +1,5 @@
 import type {
+  Job,
   ModelConnection,
   Project,
   PullRequestSnapshot,
@@ -9,6 +10,7 @@ import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { AiReviewAgent } from "../src/integrations/agent.js";
+import { IntegrationError } from "../src/integrations/integration-error.js";
 import type { AgentPort, RepositoryPort } from "../src/ports.js";
 import { Store } from "../src/store.js";
 
@@ -299,6 +301,107 @@ describe("HTTP application", () => {
     expect(JSON.stringify(detail)).not.toContain("private-provider-response");
     expect(JSON.stringify(detail)).not.toContain("model-secret");
   });
+  it.each(["", " \t\n "])(
+    "rejects publication before enqueueing when the repository token is empty or blank (%j)",
+    async (token) => {
+      const f = await fixture();
+      const session = (await f.request(`/projects/${f.project.id}/pulls`, { number: 7 }))
+        .data as Session;
+      await f.request(`/sessions/${session.id}/review`, {});
+      await f.services.worker.drain();
+      const detail = (await f.request(`/sessions/${session.id}`)).data as SessionDetail;
+      const jobs = f.store.jobs.list();
+      f.store.vault.set(`repo:${f.project.id}`, token);
+
+      const response = await f.request(`/runs/${detail.runs[0]!.id}/publish`, {});
+
+      expect(response).toEqual({
+        status: 400,
+        data: { message: "发布需要仓库访问令牌，请在仓库配置中填写具有评论权限的令牌" },
+      });
+      expect(f.store.jobs.list()).toEqual(jobs);
+      expect(f.repository.publishComment).not.toHaveBeenCalled();
+    },
+  );
+  it("allows public review and private chat without a token but rejects external messages", async () => {
+    const f = await fixture();
+    f.store.vault.set(`repo:${f.project.id}`, "");
+    const imported = await f.request(`/projects/${f.project.id}/pulls`, { number: 7 });
+    expect(imported.status).toBe(201);
+    const session = imported.data as Session;
+    expect((await f.request(`/sessions/${session.id}/review`, {})).status).toBe(201);
+    await f.services.worker.drain();
+    expect(
+      (await f.request(`/sessions/${session.id}/messages`, { body: "Explain this review" })).status,
+    ).toBe(201);
+    await f.services.worker.drain();
+    const before = (await f.request(`/sessions/${session.id}`)).data as SessionDetail;
+    expect(before.runs[0]?.status).toBe("completed");
+    expect(before.messages.some((message) => message.body === "Internal explanation")).toBe(true);
+    const jobs = f.store.jobs.list();
+
+    const response = await f.request(`/sessions/${session.id}/messages`, {
+      body: "Please check this finding",
+      visibility: "external",
+    });
+
+    expect(response).toEqual({
+      status: 400,
+      data: { message: "发布需要仓库访问令牌，请在仓库配置中填写具有评论权限的令牌" },
+    });
+    expect(f.store.jobs.list()).toEqual(jobs);
+    const after = (await f.request(`/sessions/${session.id}`)).data as SessionDetail;
+    expect(after.messages).toEqual(before.messages);
+    expect(f.repository.publishComment).not.toHaveBeenCalled();
+  });
+  it.each(["publish", "reply"] as const)(
+    "checks repository credentials before retrying a failed %s job",
+    async (kind) => {
+      const f = await fixture();
+      const session = (await f.request(`/projects/${f.project.id}/pulls`, { number: 7 }))
+        .data as Session;
+      await f.request(`/sessions/${session.id}/review`, {});
+      await f.services.worker.drain();
+      const detail = (await f.request(`/sessions/${session.id}`)).data as SessionDetail;
+      const queued =
+        kind === "publish"
+          ? await f.request(`/runs/${detail.runs[0]!.id}/publish`, {})
+          : await f.request(`/sessions/${session.id}/messages`, {
+              body: "Please check this finding",
+              visibility: "external",
+            });
+      const job = queued.data as Job;
+      f.store.vault.set(`repo:${f.project.id}`, "");
+      expect(await f.request(`/jobs/${job.id}/retry`, {})).toEqual({
+        status: 400,
+        data: { message: "只能重试失败任务" },
+      });
+      let time = Date.now();
+      const clock = vi.spyOn(Date, "now");
+      try {
+        for (let attempt = 0; attempt < job.maxAttempts; attempt++) {
+          clock.mockReturnValue(time);
+          f.store.jobs.claim();
+          f.store.jobs.fail(job.id, new IntegrationError("Repository unavailable", true, 503));
+          time += 60_000;
+        }
+      } finally {
+        clock.mockRestore();
+      }
+      const failed = f.store.jobs.get(job.id);
+      expect(failed?.status).toBe("failed");
+
+      expect(await f.request(`/jobs/${job.id}/retry`, {})).toEqual({
+        status: 400,
+        data: { message: "发布需要仓库访问令牌，请在仓库配置中填写具有评论权限的令牌" },
+      });
+      expect(f.store.jobs.get(job.id)).toEqual(failed);
+      f.store.vault.set(`repo:${f.project.id}`, "replacement-test-token");
+      const retried = await f.request(`/jobs/${job.id}/retry`, {});
+      expect(retried.status).toBe(201);
+      expect(retried.data).toMatchObject({ id: job.id, status: "queued", attempts: 0 });
+    },
+  );
   it("never returns credentials and validates repository identity and coding standard version", async () => {
     const f = await fixture();
     const state = await f.request("/workspace");
