@@ -1,6 +1,8 @@
 package com.agent.codereviewagent.integration.github;
 
 import com.agent.codereviewagent.config.GithubProperties;
+import com.agent.codereviewagent.service.DiscussionMissingException;
+import com.agent.codereviewagent.service.DiffVersionChangedException;
 import com.agent.codereviewagent.service.RepositoryClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,14 +49,14 @@ public class GithubClient implements RepositoryClient {
 
     private DiffRefs currentRefs(long id, long number, String head) {
         return diffRefs(id, number).filter(ref -> ref.headSha().equals(head))
-                .orElseThrow(() -> new IllegalStateException("GitHub PR 已变化或尚未就绪"));
+                .orElseThrow(DiffVersionChangedException::new);
     }
 
     @Override
     public String readDiff(long id, long number, DiffRefs expected) {
         String prPath = pull(id, number);
         JsonNode pr = api.get(prPath);
-        checkVersion(refs(pr), expected);
+        expected.requireCurrent(refs(pr));
         int count = pr.path("changed_files").asInt(-1);
         // GitHub 的 /pulls/{number}/files 最多返回 3000 个文件。
         if (count < 0 || count > 3000) { throw new IllegalStateException("GitHub PR 无法提供完整文件清单"); }
@@ -81,12 +83,8 @@ public class GithubClient implements RepositoryClient {
             }
         }
         // GitHub 文件列表是可变 PR 的视图。核对分页前后 head 与 base，避免混入下一个版本。
-        checkVersion(diffRefs(id, number), expected);
+        expected.requireCurrent(diffRefs(id, number));
         return diff.toString();
-    }
-
-    private static void checkVersion(Optional<DiffRefs> current, DiffRefs expected) {
-        if (current.filter(expected::equals).isEmpty()) { throw new IllegalStateException("GitHub PR 的提交已变化"); }
     }
 
     @Override
@@ -104,16 +102,26 @@ public class GithubClient implements RepositoryClient {
     @Override
     public long createLineDiscussion(long id, long number, String path, Integer newLine, Integer oldLine,
                                      DiffRefs expected, String body) {
-        checkVersion(diffRefs(id, number), expected);
+        expected.requireCurrent(diffRefs(id, number));
         if (newLine == null && oldLine == null) { return createOverviewDiscussion(id, number, body); }
+        int line = newLine == null ? oldLine : newLine;
+        String side = newLine == null ? "LEFT" : "RIGHT";
         ObjectNode payload = api.object().put("body", body).put("commit_id", expected.headSha()).put("path", path)
-                .put("line", newLine == null ? oldLine : newLine).put("side", newLine == null ? "LEFT" : "RIGHT");
+                .put("line", line).put("side", side);
         try {
             return key(api.send("POST", pull(id, number) + "/comments", payload), false);
         } catch (GithubApi.RequestFailure error) {
             if (!error.rejectedLine()) { throw error; }
-            checkVersion(diffRefs(id, number), expected);
-            return createOverviewDiscussion(id, number, body);
+            JsonNode current = api.get(pull(id, number));
+            expected.requireCurrent(refs(current));
+            // 被拒的行不一定有可用锚点；锁定两端 SHA 的比较页也适用于删除行和改名文件。
+            String repositoryUrl = required(current.path("base").path("repo"), "html_url");
+            String comparison = repositoryUrl + "/compare/" + GithubApi.segment(expected.baseSha()) + "..."
+                    + GithubApi.segment(expected.headSha());
+            String safePath = path.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+            String location = "\n\n原行评位置：<code>" + safePath + "</code>，" + side + " 第 " + line
+                    + " 行 · [查看此次差异（" + expected.headSha() + "）](" + comparison + ")";
+            return createOverviewDiscussion(id, number, body + location);
         }
     }
 
@@ -131,30 +139,79 @@ public class GithubClient implements RepositoryClient {
 
     @Override
     public void deleteNote(long id, long number, long key) {
-        api.send("DELETE", comment(id, key), null);
+        try {
+            api.send("DELETE", comment(id, key), null);
+        } catch (GithubApi.RequestFailure failure) {
+            if (!confirmedMissing(id, number, key, failure)) { throw failure; }
+        }
+    }
+
+    /** 单项 404 也可能隐藏权限不足；只有能读完同一 PR 的同类评论且找不到它，才能按删除处理。 */
+    private boolean confirmedMissing(long id, long number, long key, GithubApi.RequestFailure failure) {
+        if (!failure.notFound()) { return false; }
+        String collection = repository(id) + (overview(key) ? "/issues/" : "/pulls/") + number + "/comments";
+        Set<Long> seen = new HashSet<>();
+        for (int page = 1; ; page++) {
+            JsonNode items = api.get(collection + "?per_page=100&page=" + page);
+            if (!items.isArray() || items.size() > 100) { throw new IllegalStateException("GitHub 评论清单格式不正确"); }
+            for (JsonNode item : items) {
+                JsonNode itemId = item.path("id");
+                if (!itemId.isIntegralNumber() || !itemId.canConvertToLong() || itemId.asLong() <= 0
+                        || !seen.add(itemId.asLong())) {
+                    throw new IllegalStateException("GitHub 评论分页清单不完整");
+                }
+                if (itemId.asLong() == key / 2) { return false; }
+            }
+            if (items.size() < 100) { return true; }
+        }
+    }
+
+    private JsonNode readOverview(long id, long number, long key) {
+        try {
+            return api.get(comment(id, key));
+        } catch (GithubApi.RequestFailure failure) {
+            if (confirmedMissing(id, number, key, failure)) { throw new DiscussionMissingException(); }
+            throw failure;
+        }
     }
 
     @Override
     public List<String> listReplies(long id, long number, long key) {
         // 普通 PR 留言是平铺的；不能把其他 PR 留言当作这条发现的回复。
-        return overview(key) ? List.of() : threads.replies(threads.find(id, number, key / 2), key / 2);
+        return overview(key) ? List.of() : threads.replies(threads.find(id, number, key / 2));
     }
 
     @Override
     public boolean isDiscussionResolved(long id, long number, long key) {
-        return overview(key) ? required(api.get(comment(id, key)), "body").endsWith(RESOLVED_MARKER)
+        return overview(key) ? required(readOverview(id, number, key), "body").endsWith(RESOLVED_MARKER)
                 : threads.find(id, number, key / 2).resolved();
     }
 
     @Override
     public void resolveDiscussion(long id, long number, long key) {
+        resolveDiscussion(id, number, key, null);
+    }
+
+    @Override
+    public void resolveDiscussion(long id, long number, long key, DiffRefs expected) {
         if (overview(key)) {
             // GitHub 的 PR 普通留言没有 resolved 字段。在本服务发出的原留言上保存状态。
             String path = comment(id, key);
-            String body = required(api.get(path), "body");
-            if (!body.endsWith(RESOLVED_MARKER)) { api.send("PATCH", path, api.object().put("body", body + RESOLVED_MARKER)); }
+            String body = required(readOverview(id, number, key), "body");
+            if (!body.endsWith(RESOLVED_MARKER)) {
+                if (expected != null) { expected.requireCurrent(diffRefs(id, number)); }
+                try {
+                    api.send("PATCH", path, api.object().put("body", body + RESOLVED_MARKER));
+                } catch (GithubApi.RequestFailure failure) {
+                    if (confirmedMissing(id, number, key, failure)) { throw new DiscussionMissingException(); }
+                    throw failure;
+                }
+            }
         } else {
-            threads.resolve(threads.find(id, number, key / 2));
+            var thread = threads.find(id, number, key / 2);
+            // 定位讨论可能要翻多页；核验必须发生在查找之后、状态写入之前。
+            if (expected != null) { expected.requireCurrent(diffRefs(id, number)); }
+            threads.resolve(thread);
         }
     }
 

@@ -1,14 +1,19 @@
 package com.agent.codereviewagent.integration.github;
 
 import com.agent.codereviewagent.config.GithubProperties;
+import com.agent.codereviewagent.service.DiffVersionChangedException;
+import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.RepositoryClient.DiffRefs;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -126,13 +131,30 @@ class GithubClientTest {
         github.deleteNote(7, 4, overview);
     }
 
-    @Test
-    void onlyFallsBackToOverviewOnLineRejectionAtSameVersion() {
+    @ParameterizedTest
+    @CsvSource({"RIGHT,https://github.com/owner/agent", "LEFT,https://git.company.example/owner/agent"})
+    void fallbackOverviewKeepsTheTextAndLocationOnTheReviewedDiff(String side, String repositoryUrl) throws Exception {
+        String path = "src/a & <b>.java";
+        String body = "这里需要检查空值。";
         get(PR, pr("base", 1));
         expect("POST", PR + "/comments", 422, "{\"message\":\"Line must be part of the diff\"}");
-        get(PR, pr("base", 1));
+        ObjectNode current = (ObjectNode) json.readTree(pr("base", 1));
+        ((ObjectNode) current.get("base")).putObject("repo").put("html_url", repositoryUrl);
+        get(PR, current.toString());
         expect("POST", REPO + "/issues/4/comments", 201, "{\"id\":42}");
-        assertThat(github.createLineDiscussion(7, 4, "a.txt", 2, null, REFS, "text")).isEqualTo(85);
+        boolean right = "RIGHT".equals(side);
+        assertThat(github.createLineDiscussion(7, 4, path, right ? 19 : null, right ? null : 7, REFS, body))
+                .isEqualTo(85);
+        JsonNode line = json.readTree(bodies.remove());
+        assertThat(line.path("body").asText()).isEqualTo(body);
+        assertThat(line.path("side").asText()).isEqualTo(side);
+        assertThat(json.readTree(bodies.remove()).path("body").asText()).startsWith(body + "\n\n")
+                .contains("<code>src/a &amp; &lt;b&gt;.java</code>", side + " 第 " + (right ? 19 : 7) + " 行",
+                        "](" + repositoryUrl + "/compare/base...head)");
+    }
+
+    @Test
+    void permissionErrorsDoNotFallBackToOverview() {
         get(PR, pr("base", 1));
         expect("POST", PR + "/comments", 403, "{\"message\":\"secret error details\"}");
         assertThatThrownBy(() -> github.createLineDiscussion(7, 4, "a.txt", 2, null, REFS, "text"))
@@ -182,6 +204,77 @@ class GithubClientTest {
         github.resolveDiscussion(7, 4, key);
         bodies.remove();
         assertThat(json.readTree(bodies.remove()).at("/variables/id").asText()).isEqualTo("thread");
+    }
+
+    @Test
+    void missingOverviewIsConfirmedByTheSamePullRequestCollection() {
+        String endpoint = REPO + "/issues/comments/42";
+        String collection = REPO + "/issues/4/comments?per_page=100&page=1";
+        expect("GET", endpoint, 404, "{}");
+        get(collection, "[]");
+        assertThatThrownBy(() -> github.isDiscussionResolved(7, 4, 85))
+                .isInstanceOf(DiscussionMissingException.class);
+
+        // 如果第 2 页仍有目标，DELETE 的 404 不能被误认为删除成功。
+        ArrayNode ids = json.createArrayNode();
+        for (int i = 100; i < 200; i++) { ids.addObject().put("id", i); }
+        expect("DELETE", endpoint, 404, "{}");
+        get(collection, ids.toString());
+        get(REPO + "/issues/4/comments?per_page=100&page=2", "[{\"id\":42}]");
+        assertThatThrownBy(() -> github.deleteNote(7, 4, 85))
+                .isInstanceOf(GithubApi.RequestFailure.class).hasMessageContaining("404");
+        expect("DELETE", endpoint, 404, "{}");
+        expect("GET", collection, 403, "{}");
+        assertThatThrownBy(() -> github.deleteNote(7, 4, 85))
+                .isInstanceOf(GithubApi.RequestFailure.class).hasMessageContaining("403");
+        expect("GET", endpoint, 500, "{}");
+        assertThatThrownBy(() -> github.isDiscussionResolved(7, 4, 85))
+                .isInstanceOf(GithubApi.RequestFailure.class).hasMessageContaining("500");
+        expect("GET", endpoint, 404, "{}");
+        get(collection, "[{}]");
+        assertThatThrownBy(() -> github.isDiscussionResolved(7, 4, 85))
+                .isNotInstanceOf(DiscussionMissingException.class).hasMessageContaining("评论分页清单不完整");
+    }
+
+    @Test
+    void aDeletedThreadIsDistinctFromAnUnreadableThreadList() {
+        threads(connection("[]", true)); threads(connection("[]", false));
+        assertThatThrownBy(() -> github.listReplies(7, 4, 84)).isInstanceOf(DiscussionMissingException.class);
+
+        graph("{\"repository\":{\"pullRequest\":null}}");
+        assertThatThrownBy(() -> github.listReplies(7, 4, 84))
+                .isNotInstanceOf(DiscussionMissingException.class).hasMessageContaining("讨论分页响应不完整");
+        threads(connection("[{\"id\":\"thread\",\"isResolved\":false}]", false));
+        assertThatThrownBy(() -> github.listReplies(7, 4, 84))
+                .isNotInstanceOf(DiscussionMissingException.class).hasMessageContaining("首条评论");
+    }
+
+    @Test
+    void confirmsDeletionWhenAThreadVanishesBetweenLookupAndTheNextOperation() {
+        String found = connection("""
+                [{"id":"thread","isResolved":false,"comments":{"nodes":[{"fullDatabaseId":"42"}]}}]
+                """, false);
+        threads(found); graph("{\"node\":null}"); threads(connection("[]", false));
+        assertThatThrownBy(() -> github.listReplies(7, 4, 84)).isInstanceOf(DiscussionMissingException.class);
+
+        String notFound = "{\"data\":null,\"errors\":[{\"type\":\"NOT_FOUND\"}]}";
+        threads(found); expect("POST", "/graphql", 200, notFound); threads(connection("[]", false));
+        assertThatThrownBy(() -> github.resolveDiscussion(7, 4, 84)).isInstanceOf(DiscussionMissingException.class);
+        threads(found); expect("POST", "/graphql", 200, notFound); threads(found);
+        assertThatThrownBy(() -> github.resolveDiscussion(7, 4, 84)).isInstanceOf(GithubApi.GraphqlNotFound.class);
+    }
+
+    @Test
+    void doesNotResolveWhenTheHeadMovesWhileLookingUpTheThread() {
+        threads(connection("[]", true));
+        threads(connection("""
+                [{"id":"found","isResolved":false,"comments":{"nodes":[{"fullDatabaseId":"50"}]}}]
+                """, false));
+        get(PR, "{\"head\":{\"sha\":\"new-head\"},\"base\":{\"sha\":\"base\"}}");
+
+        // 没有排入 GraphQL mutation 响应：任何解决讨论的尝试都会让替身和测试失败。
+        assertThatThrownBy(() -> github.resolveDiscussion(7, 4, 100, REFS))
+                .isInstanceOf(DiffVersionChangedException.class);
     }
 
     private void threads(String connection) { graph("{\"repository\":{\"pullRequest\":{\"reviewThreads\":" + connection + "}}}"); }

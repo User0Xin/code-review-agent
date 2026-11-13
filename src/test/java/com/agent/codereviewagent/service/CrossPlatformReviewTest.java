@@ -3,6 +3,8 @@ package com.agent.codereviewagent.service;
 import com.agent.codereviewagent.models.dto.MergeRequestWebhookRequest;
 import com.agent.codereviewagent.models.entity.FindingEntity;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -15,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -79,6 +82,40 @@ class CrossPlatformReviewTest {
         assertThat(findings.findByMergeRequest(-REPO, NUMBER)).extracting(FindingEntity::getDiscussionId).containsExactly(202L);
         verify(revisions).checkAfterReview(REPO, NUMBER);
         verifyNoMoreInteractions(revisions);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {9, 10})
+    void deletedDiscussionRemainsInAuditButDoesNotBlockRediscovery(long number) {
+        boolean line = number == 9;
+        var refs = new RepositoryClient.DiffRefs("head", "base", null);
+        when(github.diffRefs(REPO, number)).thenReturn(Optional.of(refs));
+        when(github.readDiff(REPO, number, refs)).thenReturn("diff");
+        when(github.defaultBranch(REPO)).thenReturn("main");
+        when(github.branchHead(REPO, "main")).thenReturn("base");
+        var draft = new Reviewer.CommentDraft(line ? PATH : null, line ? 3 : null, null, "缺陷", null, "同一个问题");
+        when(model.review(any())).thenReturn(Reviewer.ReviewFindings.of(List.of(draft)));
+        if (line) {
+            when(github.createLineDiscussion(REPO, number, PATH, 3, null, refs, draft.commentBody())).thenReturn(100L, 200L);
+        } else {
+            when(github.createOverviewDiscussion(REPO, number, draft.commentBody())).thenReturn(101L, 201L);
+        }
+        service.acceptGithub(REPO, number, "opened", "", "head");
+        long deleted = line ? 100L : 101L;
+        if (line) {
+            when(github.listReplies(REPO, number, deleted)).thenThrow(new DiscussionMissingException());
+        } else {
+            when(github.isDiscussionResolved(REPO, number, deleted)).thenThrow(new DiscussionMissingException());
+        }
+
+        service.acceptGithub(REPO, number, "synchronize", "", "head");
+        var inputs = ArgumentCaptor.forClass(Reviewer.ReviewRequest.class);
+        verify(model, times(2)).review(inputs.capture());
+        assertThat(inputs.getAllValues().get(1).priorFindings()).isEmpty();
+        assertThat(records.findByMergeRequest(-REPO, number)).extracting("outcome").containsExactly("SUCCESS", "SUCCESS");
+        assertThat(findings.findByMergeRequest(-REPO, number)).extracting(FindingEntity::getDiscussionId)
+                .containsExactly(deleted, deleted + 100);
+        verify(github, never()).resolveDiscussion(REPO, number, deleted, refs);
     }
 
     private static RepositoryClient.DiffRefs prepareRepository(RepositoryClient client, String platform) {

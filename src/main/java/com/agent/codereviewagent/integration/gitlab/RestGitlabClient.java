@@ -1,6 +1,7 @@
 package com.agent.codereviewagent.integration.gitlab;
 
 import com.agent.codereviewagent.config.GitlabProperties;
+import com.agent.codereviewagent.service.DiffVersionChangedException;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -102,7 +103,7 @@ public class RestGitlabClient implements GitlabClient {
         DiffRefs refs = diffRefs(projectId, mergeRequestIid)
                 .orElseThrow(() -> new IllegalStateException("合并请求 diff 尚未就绪，不能写入行评论"));
         if (!headSha.equals(refs.headSha())) {
-            throw new IllegalStateException("合并请求提交已变化，不能写入旧审查的行评论");
+            throw new DiffVersionChangedException();
         }
         return createLineDiscussion(projectId, mergeRequestIid, path, newLine, oldLine, refs, body);
     }
@@ -111,9 +112,7 @@ public class RestGitlabClient implements GitlabClient {
     public long createLineDiscussion(long projectId, long mergeRequestIid, String path,
                                      Integer newLine, Integer oldLine, DiffRefs refs, String body) {
         String mergeRequest = mergeRequest(projectId, mergeRequestIid);
-        if (!diffRefs(projectId, mergeRequestIid).filter(refs::equals).isPresent()) {
-            throw new IllegalStateException("合并请求 diff 版本已变化，不能写入旧审查的行评论");
-        }
+        refs.requireCurrent(diffRefs(projectId, mergeRequestIid));
         String oldPath = path;
         String newPath = path;
         // 重命名时新旧路径不同，行评论需要同一版 diff 中的两侧路径才能定位。
@@ -143,6 +142,7 @@ public class RestGitlabClient implements GitlabClient {
             if ((exception.status == 400 || exception.status == 422)
                     && (error.contains("position") || error.contains("line_code")
                         || error.contains("new_line") || error.contains("old_line"))) {
+                refs.requireCurrent(diffRefs(projectId, mergeRequestIid));
                 return createOverviewDiscussion(projectId, mergeRequestIid, body);
             }
             throw exception;
@@ -188,7 +188,13 @@ public class RestGitlabClient implements GitlabClient {
 
     @Override
     public void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId) {
+        resolveDiscussion(projectId, mergeRequestIid, discussionId, null);
+    }
+
+    @Override
+    public void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId, DiffRefs expected) {
         JsonNode discussion = discussion(projectId, mergeRequestIid, discussionId);
+        if (expected != null) { expected.requireCurrent(diffRefs(projectId, mergeRequestIid)); }
         send("PUT", mergeRequest(projectId, mergeRequestIid) + "/discussions/"
                 + encode(discussion.path("id").asText()), json.createObjectNode().put("resolved", true));
     }

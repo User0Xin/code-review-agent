@@ -69,10 +69,22 @@ final class GithubApi {
         ObjectNode payload = object().put("query", query);
         payload.set("variables", variables);
         JsonNode result = send("POST", "/graphql", payload);
+        JsonNode errors = result.path("errors");
+        if (errors.isArray() && !errors.isEmpty()) {
+            boolean notFound = true;
+            for (JsonNode error : errors) {
+                if (!"NOT_FOUND".equals(error.path("type").asText())) { notFound = false; }
+            }
+            if (notFound) { throw new GraphqlNotFound(); }
+        }
         if (result.hasNonNull("errors") || !result.path("data").isObject()) {
             throw new IllegalStateException("GitHub GraphQL 请求未成功");
         }
         return result.get("data");
+    }
+
+    static final class GraphqlNotFound extends IllegalStateException {
+        GraphqlNotFound() { super("GitHub GraphQL 对象不可访问"); }
     }
 
     private String request(String method, String path, String accept, ObjectNode payload) {
@@ -111,6 +123,7 @@ final class GithubApi {
             this.status = status;
             this.details = details;
         }
+        boolean notFound() { return status == 404; }
         boolean rejectedLine() {
             if (status != 422) { return false; }
             String error = details.toLowerCase(java.util.Locale.ROOT);

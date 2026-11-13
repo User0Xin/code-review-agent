@@ -8,6 +8,8 @@ import com.agent.codereviewagent.models.entity.FindingEntity;
 import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
 import com.agent.codereviewagent.service.CodingStandardSource;
 import com.agent.codereviewagent.service.CodingStandardRevisionService;
+import com.agent.codereviewagent.service.DiffVersionChangedException;
+import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
@@ -121,6 +123,9 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         try {
             review(context, description, expected);
         }
+        catch (DiffVersionChangedException changed) {
+            fail(context, changed.getMessage(), null);
+        }
         catch (RuntimeException exception) {
             fail(context, context.phase, exception);
         }
@@ -150,18 +155,14 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 projectId, mergeRequestIid, diffRefs.headSha(), priorFindings, context.spec, context.standards, diff));
         context.phase = "提交状态核对失败";
         // 模型返回时合并请求可能已更新；行评论的定位依赖整组 diff 引用，仅核对 head 不够。
-        var current = context.client.diffRefs(projectId, mergeRequestIid);
-        if (current.isEmpty() || !diffRefs.equals(current.get())) {
-            fail(context, "审查期间提交已变化", null);
-            return;
-        }
+        diffRefs.requireCurrent(context.client.diffRefs(projectId, mergeRequestIid));
         List<Long> resolved = findings.resolvedDiscussionIds() == null ? List.of() : findings.resolvedDiscussionIds();
         List<Long> declined = findings.declinedDiscussionIds() == null ? List.of() : findings.declinedDiscussionIds();
         context.phase = "评论写回失败";
         int failed = postDrafts(context, diffRefs,
                 stillOpen(findings.drafts(), priorFindings, resolved, declined));
         context.phase = "讨论状态更新失败";
-        resolveKnownDiscussions(context, existing, resolved, declined);
+        resolveKnownDiscussions(context, diffRefs, priorFindings, resolved, declined);
         if (failed > 0) {
             fail(context, "有 " + failed + " 条没能写回", null);
             return;
@@ -188,6 +189,9 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             long discussionId;
             try {
                 discussionId = postOne(context, refs, draft);
+            }
+            catch (DiffVersionChangedException changed) {
+                throw changed;
             }
             catch (RuntimeException exception) {
                 failed++;
@@ -226,6 +230,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                     refs,
                     draft.commentBody());
         }
+        refs.requireCurrent(context.client.diffRefs(context.projectId, context.mergeRequestIid));
         return context.client.createOverviewDiscussion(context.projectId, context.mergeRequestIid, draft.commentBody());
     }
 
@@ -235,15 +240,19 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         List<Reviewer.PriorFinding> prior = new ArrayList<>();
         for (FindingEntity finding : existing) {
             long discussionId = finding.getDiscussionId();
-            prior.add(new Reviewer.PriorFinding(
-                    discussionId,
-                    finding.getPath(),
-                    finding.getNewLine(),
-                    finding.getOldLine(),
-                    finding.getCategory(),
-                    finding.getCommentBody(),
-                    context.client.listReplies(context.projectId, context.mergeRequestIid, discussionId),
-                    context.client.isDiscussionResolved(context.projectId, context.mergeRequestIid, discussionId)));
+            try {
+                prior.add(new Reviewer.PriorFinding(
+                        discussionId,
+                        finding.getPath(),
+                        finding.getNewLine(),
+                        finding.getOldLine(),
+                        finding.getCategory(),
+                        finding.getCommentBody(),
+                        context.client.listReplies(context.projectId, context.mergeRequestIid, discussionId),
+                        context.client.isDiscussionResolved(context.projectId, context.mergeRequestIid, discussionId)));
+            } catch (DiscussionMissingException deleted) {
+                // 旧发现仍留在数据库作审计，已删除的远端讨论不应阻止同一问题重新出现。
+            }
         }
         return prior;
     }
@@ -286,16 +295,22 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
 
     /** 只把这次 diff 消除的、且本来就存在的讨论标成已解决。不删除发现，也不删讨论。 */
     private void resolveKnownDiscussions(ReviewContext context,
-                                         List<FindingEntity> existing,
+                                         RepositoryClient.DiffRefs refs,
+                                         List<Reviewer.PriorFinding> priorFindings,
                                          List<Long> resolved,
                                          List<Long> declined) {
         for (Long discussionId : resolved) {
             if (discussionId == null || declined.contains(discussionId)) {
                 continue;
             }
-            boolean known = existing.stream().anyMatch(finding -> discussionId.equals(finding.getDiscussionId()));
+            boolean known = priorFindings.stream().anyMatch(finding -> discussionId == finding.discussionId());
             if (known) {
-                context.client.resolveDiscussion(context.projectId, context.mergeRequestIid, discussionId);
+                try {
+                    context.client.resolveDiscussion(context.projectId, context.mergeRequestIid, discussionId, refs);
+                }
+                catch (DiscussionMissingException removed) {
+                    // 本轮读取历史后讨论被删除，已无需解决。
+                }
             }
         }
     }

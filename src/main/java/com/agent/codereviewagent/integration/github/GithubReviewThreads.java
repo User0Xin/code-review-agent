@@ -1,5 +1,6 @@
 package com.agent.codereviewagent.integration.github;
 
+import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -39,7 +40,7 @@ final class GithubReviewThreads {
 
     GithubReviewThreads(GithubApi api) { this.api = api; }
 
-    record Thread(String id, boolean resolved) { }
+    record Thread(String id, boolean resolved, long repositoryId, long number, long root) { }
 
     Thread find(long repositoryId, long number, long commentId) {
         String[] name = api.repository(repositoryId).split("/", -1);
@@ -48,23 +49,45 @@ final class GithubReviewThreads {
         do {
             JsonNode page = api.graphql(FIND, variables).path("repository").path("pullRequest").path("reviewThreads");
             for (JsonNode thread : nodes(page)) {
-                if (thread.path("comments").path("nodes").path(0).path("fullDatabaseId").asLong() == commentId) {
-                    return new Thread(GithubClient.required(thread, "id"), thread.path("isResolved").asBoolean());
+                JsonNode comments = thread.path("comments").path("nodes");
+                if (!comments.isArray() || comments.size() != 1 || !thread.path("isResolved").isBoolean()) {
+                    throw new IllegalStateException("GitHub 讨论首条评论或状态不完整");
+                }
+                long root = comments.get(0).path("fullDatabaseId").asLong(-1);
+                if (root <= 0) { throw new IllegalStateException("GitHub 讨论首条评论缺少编号"); }
+                if (root == commentId) {
+                    return new Thread(GithubClient.required(thread, "id"), thread.get("isResolved").booleanValue(),
+                            repositoryId, number, commentId);
                 }
             }
             if (!advance(page, variables, cursors)) { break; }
         } while (true);
-        throw new IllegalStateException("找不到该 GitHub PR 对应的讨论");
+        // GraphQL 确认此 PR 的连接可读，且已读完全部线程。
+        throw new DiscussionMissingException();
     }
 
-    List<String> replies(Thread thread, long root) {
+    private JsonNode queryThread(Thread thread, String query, ObjectNode variables) {
+        try {
+            return api.graphql(query, variables);
+        } catch (GithubApi.GraphqlNotFound error) {
+            find(thread.repositoryId(), thread.number(), thread.root()); // 再查可读的 PR，确认是删除还是请求失败。
+            throw error;
+        }
+    }
+
+    List<String> replies(Thread thread) {
         List<String> replies = new ArrayList<>();
         ObjectNode variables = api.object().put("id", thread.id());
         Set<String> cursors = new HashSet<>();
         do {
-            JsonNode page = api.graphql(REPLIES, variables).path("node").path("comments");
+            JsonNode node = queryThread(thread, REPLIES, variables).path("node");
+            if (node.isNull()) {
+                // 定位线程和读取回复之间也可能被删除；单独的 null 不能证明已经删除。
+                find(thread.repositoryId(), thread.number(), thread.root());
+            }
+            JsonNode page = node.path("comments");
             for (JsonNode note : nodes(page)) {
-                if (note.path("fullDatabaseId").asLong() != root && !note.path("viewerDidAuthor").asBoolean()) {
+                if (note.path("fullDatabaseId").asLong() != thread.root() && !note.path("viewerDidAuthor").asBoolean()) {
                     replies.add(GithubClient.required(note, "body"));
                 }
             }
@@ -90,7 +113,7 @@ final class GithubReviewThreads {
 
     void resolve(Thread thread) {
         if (thread.resolved()) { return; }
-        if (!api.graphql(RESOLVE, api.object().put("id", thread.id()))
+        if (!queryThread(thread, RESOLVE, api.object().put("id", thread.id()))
                 .path("resolveReviewThread").path("thread").path("isResolved").asBoolean()) {
             throw new IllegalStateException("GitHub 讨论未能标记为已解决");
         }

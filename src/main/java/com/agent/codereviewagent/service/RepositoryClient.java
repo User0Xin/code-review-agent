@@ -37,6 +37,12 @@ public interface RepositoryClient {
 
     void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId);
 
+    /** 如果平台需要先查找讨论，再修改状态，适配器应把核验放在实际修改之前。 */
+    default void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId, DiffRefs expected) {
+        expected.requireCurrent(diffRefs(projectId, mergeRequestIid));
+        resolveDiscussion(projectId, mergeRequestIid, discussionId);
+    }
+
     List<String> listFiles(long projectId, String ref);
 
     String readFile(long projectId, String path, String ref);
@@ -48,5 +54,10 @@ public interface RepositoryClient {
     /** 完整的三个提交标识共同定位一个 diff 版本，供读取差异和定位行评论时使用。 */
     record DiffRefs(String headSha, String baseSha, String startSha) {
         public DiffRefs(String headSha) { this(headSha, null, null); }
+
+        /** 无法确认当前仍是这一版 diff 时，不发布基于旧版本的结论。 */
+        public void requireCurrent(Optional<DiffRefs> current) {
+            if (current.filter(this::equals).isEmpty()) { throw new DiffVersionChangedException(); }
+        }
     }
 }
