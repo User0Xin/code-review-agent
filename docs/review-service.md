@@ -1,12 +1,29 @@
 # 审查服务配置与运行
 
-审查服务接收一个配置的 GitLab 被审查仓库的合并请求事件，读取当前 diff、spec 和编码规范，直接写回中文讨论；编码规范和缺陷发现积累后，创建待人审核的编码规范修订。服务只提交规范文件和创建修订合并请求，不批准或合并代码合并请求，也不自动合并编码规范修订。现有聊天接口独立保留。
+审查服务支持 GitHub Pull Request 和 GitLab Merge Request。两者共用审查流程：读取指定提交的 diff、spec 和编码规范，回写中文评论，并在复审时读取历史讨论。GitLab 还支持根据积累的发现创建待人审核的编码规范修订；GitHub 接入不创建分支或修订 PR。
 
-本文描述已实现的配置与恢复机制。本地测试中的 GitLab、飞书项目和模型由替身提供；测试通过不代表已经配置真实凭据、登记线上 webhook、部署服务或执行过真实审查。
+本文描述已实现的配置与恢复机制。本地测试中的 GitLab 和模型由替身提供；测试通过不代表已经配置真实凭据、登记线上 webhook、部署服务或执行过真实审查。
 
 ## 部署配置
 
-配置定义见 [application.yaml](../src/main/resources/application.yaml)。需要 JDK 21、Maven、可读写的持久化目录，以及能访问 GitLab、飞书项目和模型服务的网络。
+配置定义见 [application.yaml](../src/main/resources/application.yaml)。需要 JDK 21、Maven、可读写的持久化目录，以及能访问 GitLab 和模型服务的网络。
+
+### GitHub：接入本仓库
+
+默认目标是 [User0Xin/code-review-agent](https://github.com/User0Xin/code-review-agent)，数字 ID 为 `1418627378`。迁移到其他仓库时同时设置 `REVIEW_GITHUB_REPOSITORY`（`owner/repo`）和 `REVIEW_GITHUB_REPOSITORY_ID`（可用 `gh api repos/owner/repo --jq .id` 查询）。服务同时校验事件中的名称和 ID，不使用 payload 提供的 URL 访问仓库。
+
+1. 设置 `REVIEW_GITHUB_TOKEN`（仅该仓库；Contents 读、Pull requests 读写）和 `REVIEW_GITHUB_WEBHOOK_SECRET`（独立生成的随机值）。模型沿用下方的 `OPENAI_*` 配置。
+2. 用 JDK 21 执行 `mvn package`。若只公开 GitHub 入口，运行 `java -jar target/code-review-agent-0.0.1-SNAPSHOT.jar --server.address=127.0.0.1 --server.port=18089 --review.gitlab.webhook-enabled=false`。
+3. 本地可用 `cpolar http -proto=https 18089` 获取 HTTPS 地址。在仓库 [Settings → Webhooks](https://github.com/User0Xin/code-review-agent/settings/hooks) 登记 `https://<公网域名>/github/webhooks/pull-requests`，选择 `application/json`、填写同一签名密钥、启用 SSL 校验，只订阅 **Pull requests**。使用临时域名时，隧道重启后需核对并更新 webhook URL。
+4. 在 Recent deliveries 确认 GitHub 发送的 `ping` 返回 200。打开、重新打开 PR 或向其源分支推送提交时，`pull_request` 返回 202 表示已入队。审查结果查看 PR 评论和 SQLite 的 `review_record`。没有发现时不会为了报成功而发评论。
+
+入口按原始请求体验证 [GitHub 的 HMAC-SHA256 签名](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)。未配置密钥返回 503；签名错误返回 403。审查按入队顺序运行，最多等待 32 项。队列满时返回 503；队列存在内存中，进程异常退出后可从 Recent deliveries 重投未处理事件。GitHub 和 GitLab 的历史按平台隔离：在 SQLite 里，GitHub 的 `project_id` 为仓库数字 ID 的相反数，GitLab 仍为原项目 ID。
+
+GitHub 行评论使用原生 review thread，概览评论发在 PR 会话中。若 GitHub 拒绝行位置，回退的概览评论会注明路径、左右侧和行号，并链接到审查时两个提交的比较页。普通 PR 留言没有回复线程，服务不会把其它留言算作某一条发现的回复。
+
+服务核对 diff 版本后才写回评论或解决讨论；一旦发现版本已变化，就停止应用本轮余下的审查结论，保留已写回的发现。若 GitHub 返回的文本补丁不完整，审查按失败记录。
+
+若维护者删除了先前发布的评论，服务在确认该讨论已不在当前 PR 后，会保留本地历史，但不再用它过滤或解决本轮的发现。若被删的是失败通知，下次失败可以发布新通知。网络错误或无法读取评论列表时，服务仍按读取或清理失败处理。
 
 ### GitLab 与模型
 
@@ -20,16 +37,9 @@
 
 模型调用使用文本 JSON 契约，不依赖函数工具。每次从规范分支的固定提交重新选择并读取编码规范；合并请求中尚未生效的规范修改不会改变这次审查依据。lint 配置、依赖目录和生成目录不当作编码规范。
 
-### 飞书项目与 spec
+### 仓库中的 spec
 
-- `FEISHU_PROJECT_BASE_URL`：默认 `https://project.feishu.cn`。
-- `FEISHU_PROJECT_KEY`：固定空间的 `project_key`。
-- `FEISHU_PROJECT_PLUGIN_ID`、`FEISHU_PROJECT_PLUGIN_SECRET`：已发布并安装到该空间的插件凭据。
-- `FEISHU_PROJECT_USER_KEY`：具有读取空间权限的专用账号标识。
-
-源分支形如 `feature/7058321625-export` 时读取工作项 `7058321625`。服务自动换取并缓存短期插件令牌，再使用空间内全部工作项类型按 ID 定位，读取描述的纯文本 `doc_text`。工作项正文每次重读；空间找不到该工作项时正常继续。接口错误、凭据缺失和账号失去权限都按读取失败处理。
-
-仓库中的 spec 文档由模型先从最新提交的 `docs/` 清单选择，再由服务校验路径并读取；编码规范文件从 spec 候选中排除。工作项和仓库文档都没有时静默跳过 spec，只在审查记录中标记。合并请求描述只能补充已有 spec。
+服务从本次审查对应提交的 `docs/` 目录列出候选文档，排除已选作编码规范的文件。模型从清单中选择 spec 文档，服务校验路径后读取正文。合并请求描述只能补充已有 spec。没有选中任何 spec 文档时，服务在审查记录中标记跳过 spec，继续检查编码规范和缺陷。
 
 ### 阈值与等待
 
@@ -37,9 +47,9 @@
 - `REVIEW_REVISION_M`：总结时同类发现的最低数量，默认 `3`。
 - `review.diff-wait.max-attempts`：diff 等待总次数，默认 `3`。
 - `review.diff-wait.interval`：重试间隔，默认 `2s`。
-- `review.gitlab.request-timeout`、`review.feishu-project.request-timeout`：各自默认 `30s`。
+- `review.gitlab.request-timeout`：GitLab 请求超时，默认 `30s`。
 
-后三组配置可通过启动参数覆盖，例如 `--review.diff-wait.max-attempts=5 --review.diff-wait.interval=3s`。N 和 M 小于 1 时按 1 处理。
+后三项配置可通过启动参数覆盖，例如 `--review.diff-wait.max-attempts=5 --review.diff-wait.interval=3s`。N 和 M 小于 1 时按 1 处理。
 
 每次审查结束检查是否需要修订。只有编码规范类和缺陷类发现参与；达到触发条件后，逐条读取讨论中除服务账号之外的全部回复，按最终态度判定误报并保存理由。误报排除后仍需达到阈值。仅把讨论标成已解决不代表误报；不足 M 的类别继续积累。
 
@@ -53,7 +63,7 @@ mvn test
 mvn -DskipTests package
 ```
 
-前两条分别验证干净构建和增量构建，与 CI 保持一致。测试通过 webhook 观察讨论、持久化记录和修订行为；HTTP 传输测试使用本机替身，不请求真实 GitLab 或飞书项目，也不调用真实模型。
+前两条分别验证干净构建和增量构建，与 CI 保持一致。测试通过 webhook 观察讨论、持久化记录和修订行为；HTTP 传输测试使用本机替身，不请求真实 GitLab，也不调用真实模型。
 
 运行前从部署环境或秘密管理服务注入凭据，并设置持久化文件路径。示例仅展示非敏感参数：
 
@@ -65,7 +75,7 @@ $env:REVIEW_STANDARDS_BRANCH = 'dev'
 java -jar target/code-review-agent-0.0.1-SNAPSHOT.jar
 ```
 
-数据库父目录需预先存在且可写。默认监听端口为 `8088`，可用 `--server.port=8088` 等 Spring Boot 参数覆盖。示例没有提供令牌及模型、飞书项目凭据，需要按上文补齐。
+数据库父目录需预先存在且可写。默认监听端口为 `8088`，可用 `--server.port=8088` 等 Spring Boot 参数覆盖。运行前还需配置 GitLab 令牌和模型服务凭据。
 
 ## 配置 webhook
 

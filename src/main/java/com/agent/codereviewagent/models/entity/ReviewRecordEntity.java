@@ -30,11 +30,13 @@ public class ReviewRecordEntity {
 
     private String standardDocumentPaths;
 
+    /** 审查结束后生成规范修订的错误，独立于本次审查的 outcome。 */
     private String summaryError;
     @TableField("trigger_reason")
     private String trigger;
     private String headSha;
     private Long failureNoteId;
+    /** 写入或清理失败说明时的错误；reason 仍记录审查本身的失败原因。 */
     private String noteError;
     private String failureDetail;
 }

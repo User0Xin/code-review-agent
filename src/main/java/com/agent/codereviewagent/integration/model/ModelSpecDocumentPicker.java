@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 
-/** 模型只选择候选路径；读取和范围校验仍由审查服务完成。 */
+/** 只把候选路径发给模型；审查服务核对返回的路径后，按本次审查的提交读取 spec 正文。 */
 @Component
 public class ModelSpecDocumentPicker implements SpecDocumentPicker {
 

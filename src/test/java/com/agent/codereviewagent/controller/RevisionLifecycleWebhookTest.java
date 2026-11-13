@@ -8,7 +8,6 @@ import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.RevisionClient;
 import com.agent.codereviewagent.service.RevisionSummarizer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
 import org.junit.jupiter.api.BeforeEach;
@@ -340,7 +339,6 @@ class RevisionLifecycleWebhookTest {
     static class Fakes {
         @Bean @Primary GitlabClient gitlabClient() { return GITLAB; }
         @Bean @Primary Reviewer reviewer() { return REVIEWER; }
-        @Bean @Primary WorkItemClient workItemClient() { return id -> Optional.empty(); }
         @Bean @Primary SpecDocumentPicker specDocumentPicker() { return candidates -> List.of(); }
         @Bean @Primary CodingStandardPicker codingStandardPicker() { return candidates -> List.of(PATH); }
         @Bean @Primary FalsePositiveJudge falsePositiveJudge() { return JUDGE; }

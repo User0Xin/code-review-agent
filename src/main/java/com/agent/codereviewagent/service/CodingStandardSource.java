@@ -20,14 +20,19 @@ public class CodingStandardSource {
     }
 
     public Snapshot load(long projectId) {
+        return load(gitlab, projectId);
+    }
+
+    public Snapshot load(RepositoryClient repository, long projectId) {
         String configured = properties.getBranch();
-        String branch = configured == null || configured.isBlank() ? gitlab.defaultBranch(projectId) : configured;
-        String ref = gitlab.branchHead(projectId, branch);
-        List<String> candidates = gitlab.listFiles(projectId, ref).stream().filter(CodingStandardSource::document).toList();
+        String branch = configured == null || configured.isBlank() ? repository.defaultBranch(projectId) : configured;
+        // 文件清单和正文共用同一提交，避免规范分支在两次读取之间更新。
+        String ref = repository.branchHead(projectId, branch);
+        List<String> candidates = repository.listFiles(projectId, ref).stream().filter(CodingStandardSource::document).toList();
         List<Reviewer.StandardDocument> documents = new ArrayList<>();
         for (String path : picker.pick(candidates)) {
             if (candidates.contains(path) && documents.stream().noneMatch(item -> item.path().equals(path))) {
-                documents.add(new Reviewer.StandardDocument(path, gitlab.readFile(projectId, path, ref)));
+                documents.add(new Reviewer.StandardDocument(path, repository.readFile(projectId, path, ref)));
             }
         }
         return new Snapshot(branch, ref, List.copyOf(documents));
@@ -44,6 +49,7 @@ public class CodingStandardSource {
     }
 
     public record Snapshot(String branch, String ref, List<Reviewer.StandardDocument> documents) {
+        /** 没有仓库规范时仍检查通用坏味道；两者有冲突时以仓库规范为准。 */
         public Reviewer.CodingStandards standards() { return new Reviewer.CodingStandards(documents, true, "编码规范优先"); }
     }
 }

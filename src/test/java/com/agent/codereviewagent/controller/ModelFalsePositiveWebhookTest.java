@@ -8,7 +8,6 @@ import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.RevisionClient;
 import com.agent.codereviewagent.service.RevisionSummarizer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -192,7 +191,6 @@ class ModelFalsePositiveWebhookTest {
             return request -> Reviewer.ReviewFindings.of(List.of(
                     new Reviewer.CommentDraft("main.go", null, null, "缺陷", null, "资源没有释放。")));
         }
-        @Bean @Primary WorkItemClient falsePositiveWorkItems() { return id -> Optional.empty(); }
         @Bean @Primary SpecDocumentPicker falsePositiveSpecPicker() { return paths -> List.of(); }
         @Bean @Primary CodingStandardPicker falsePositiveStandardsPicker() { return paths -> List.of("docs/coding.md"); }
         @Bean @Primary RevisionSummarizer falsePositiveSummarizer() {

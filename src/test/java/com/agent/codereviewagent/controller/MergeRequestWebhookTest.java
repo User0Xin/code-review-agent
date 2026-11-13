@@ -12,7 +12,6 @@ import com.agent.codereviewagent.config.StandardsBranchProperties;
 import com.agent.codereviewagent.config.GitlabProperties;
 import com.agent.codereviewagent.service.CodingStandardPicker;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,7 +56,6 @@ class MergeRequestWebhookTest {
     private static final Instant NOW = Instant.parse("2026-10-15T09:00:00Z");
     private static final FakeGitlabImpl GITLAB = new FakeGitlabImpl();
     private static final RecordingReviewerImpl REVIEWER = new RecordingReviewerImpl();
-    private static final FakeWorkItems WORK_ITEMS = new FakeWorkItems();
     private static final FakeSpecPicker PICKER = new FakeSpecPicker();
     private static final FakeStandardPicker STANDARDS = new FakeStandardPicker();
 
@@ -92,7 +90,6 @@ class MergeRequestWebhookTest {
         REVIEWER.lastRequest = null;
         REVIEWER.failure = null;
         REVIEWER.afterReview = null;
-        WORK_ITEMS.reset();
         PICKER.reset();
         STANDARDS.reset();
         standardsBranch.setBranch("");
@@ -525,19 +522,17 @@ class MergeRequestWebhookTest {
     }
 
     @Test
-    void aWorkItemAndChosenDocumentEnterTheReview() throws Exception {
+    void aNumberedBranchUsesTheChosenRepositorySpecAndMergeRequestDescription() throws Exception {
         GITLAB.readyWith("abc123");
         GITLAB.file("docs/design.md", "增加导出字段");
         GITLAB.file("vendor/lib.go", "忽略");
         PICKER.chosen = java.util.List.of("docs/design.md", "vendor/lib.go", "docs/../secret.md");
-        WORK_ITEMS.text = java.util.Map.of("7058321625", "工作项要求导出");
 
         postWebhook(payload("open", null, "feature/7058321625-export", "描述只是补充"));
 
         assertThat(PICKER.seen).containsExactly("docs/design.md");
         assertThat(GITLAB.readRefs).containsExactly("abc123:docs/design.md");
         assertThat(REVIEWER.lastRequest.spec().skipped()).isFalse();
-        assertThat(REVIEWER.lastRequest.spec().workItemText()).isEqualTo("工作项要求导出");
         assertThat(REVIEWER.lastRequest.spec().documents()).singleElement()
                 .extracting(Reviewer.SpecDocument::content)
                 .isEqualTo("增加导出字段");
@@ -563,20 +558,6 @@ class MergeRequestWebhookTest {
     }
 
     @Test
-    void aMissingWorkItemStillAllowsRepositorySpec() throws Exception {
-        GITLAB.readyWith("abc123");
-        GITLAB.file("docs/spec.md", "正式 spec");
-        PICKER.chosen = List.of("docs/spec.md");
-
-        postWebhook(payload("open", null, "feature/42-missing", "补充说明"));
-
-        assertThat(WORK_ITEMS.reads).isEqualTo(1);
-        assertThat(REVIEWER.lastRequest.spec().workItemText()).isNull();
-        assertThat(REVIEWER.lastRequest.spec().skipped()).isFalse();
-        assertThat(GITLAB.notes).isEmpty();
-    }
-
-    @Test
     void aSelectedSpecDocumentReadFailureLeavesAFailureDiscussion() throws Exception {
         GITLAB.readyWith("abc123");
         GITLAB.file("docs/spec.md", "正式 spec");
@@ -595,30 +576,31 @@ class MergeRequestWebhookTest {
     }
 
     @Test
-    void missingWorkItemAndDocumentsSkipSpecWithoutAComment() throws Exception {
+    void aDescriptionAloneSkipsSpecWithoutAComment() throws Exception {
         GITLAB.readyWith("abc123");
 
-        postWebhook(payload("open", null, "main", "只有合并请求描述"));
+        postWebhook(payload("open", null, "feature/7058321625-export", "只有合并请求描述"));
 
         assertThat(REVIEWER.lastRequest.spec().skipped()).isTrue();
-        assertThat(REVIEWER.lastRequest.spec().workItemText()).isNull();
         assertThat(REVIEWER.lastRequest.spec().documents()).isEmpty();
         assertThat(records.findByMergeRequest(9, 3).get(0).getSpecSkipped()).isTrue();
         assertThat(GITLAB.notes).isEmpty();
-        assertThat(WORK_ITEMS.reads).isZero();
     }
 
     @Test
-    void eachReviewReadsTheCurrentSpec() throws Exception {
+    void eachReviewReadsTheRepositorySpecAtItsHeadCommit() throws Exception {
+        GITLAB.fileOn("abc123", "docs/spec.md", "第一版");
+        GITLAB.fileOn("def456", "docs/spec.md", "第二版");
+        PICKER.chosen = List.of("docs/spec.md");
         GITLAB.readyWith("abc123");
-        WORK_ITEMS.text = java.util.Map.of("42", "第一版");
-        postWebhook(payload("open", null, "feature/42-one", null));
-        WORK_ITEMS.text = java.util.Map.of("42", "第二版");
+        postWebhook(openPayload());
 
-        postWebhook(payload("update", "oldsha", "feature/42-one", null));
+        GITLAB.readyWith("def456");
+        postWebhook(updatePayload("abc123"));
 
-        assertThat(REVIEWER.lastRequest.spec().workItemText()).isEqualTo("第二版");
-        assertThat(WORK_ITEMS.reads).isEqualTo(2);
+        assertThat(GITLAB.readRefs).containsExactly("abc123:docs/spec.md", "def456:docs/spec.md");
+        assertThat(REVIEWER.lastRequest.spec().documents()).singleElement()
+                .extracting(Reviewer.SpecDocument::content).isEqualTo("第二版");
     }
 
     @Test
@@ -761,12 +743,6 @@ class MergeRequestWebhookTest {
         Sleeper sleeper() {
             return duration -> {
             };
-        }
-
-        @Bean
-        @Primary
-        WorkItemClient workItemClient() {
-            return WORK_ITEMS;
         }
 
         @Bean
@@ -956,23 +932,6 @@ class MergeRequestWebhookTest {
             if (failure != null) { throw failure; }
             if (afterReview != null) { afterReview.run(); }
             return new ReviewFindings(findings.drafts(), resolvedDiscussionIds, declinedDiscussionIds);
-        }
-    }
-
-    static final class FakeWorkItems implements WorkItemClient {
-
-        private java.util.Map<String, String> text = java.util.Map.of();
-        private int reads;
-
-        void reset() {
-            text = java.util.Map.of();
-            reads = 0;
-        }
-
-        @Override
-        public java.util.Optional<String> readPlainText(String workItemId) {
-            reads++;
-            return java.util.Optional.ofNullable(text.get(workItemId));
         }
     }
 

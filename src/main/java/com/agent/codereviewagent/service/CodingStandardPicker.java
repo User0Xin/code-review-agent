@@ -2,7 +2,7 @@ package com.agent.codereviewagent.service;
 
 import java.util.List;
 
-/** 从规范分支的文件清单里挑出编码规范。 */
+/** 在规范分支的候选文档中挑选编码规范；没有合适文档时返回空列表。 */
 public interface CodingStandardPicker {
 
     List<String> pick(List<String> candidates);

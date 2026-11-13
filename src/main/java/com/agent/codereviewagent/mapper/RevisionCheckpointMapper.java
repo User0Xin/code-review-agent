@@ -7,8 +7,10 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
+/** 按项目保存规范总结的进度与重试依据。 */
 @Mapper
 public interface RevisionCheckpointMapper extends BaseMapper<RevisionCheckpointEntity> {
+    /** 结束重试时清空旧的发现编号；仍需重试时保留它们，供下次核对。 */
     @Insert("INSERT INTO revision_checkpoint(project_id,last_finding_id,retry_pending) VALUES(#{project},#{last},#{retry}) "
             + "ON CONFLICT(project_id) DO UPDATE SET last_finding_id=excluded.last_finding_id,retry_pending=excluded.retry_pending,"
             + "retry_finding_ids=CASE WHEN excluded.retry_pending=0 THEN NULL ELSE retry_finding_ids END")

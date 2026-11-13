@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Arrays;
 import java.util.Optional;
 
+/** 将远端修订状态和它采用的发现保存在同一事务内，项目检查点则单独更新。 */
 @Service
 public class RevisionRecordServiceImpl implements RevisionRecordService {
     private final CodingStandardRevisionMapper revisions;
@@ -38,6 +39,7 @@ public class RevisionRecordServiceImpl implements RevisionRecordService {
     public RevisionCheckpointEntity checkpoint(long projectId) {
         RevisionCheckpointEntity state = checkpoints.selectById(projectId);
         if (state == null) {
+            // 首次检查从头统计；仅在写入实际进度时才创建检查点记录。
             state = new RevisionCheckpointEntity();
             state.setProjectId(projectId);
             state.setLastFindingId(0L);
@@ -73,6 +75,7 @@ public class RevisionRecordServiceImpl implements RevisionRecordService {
                 .eq(CodingStandardRevisionEntity::getId, revision.getId())
                 .set(CodingStandardRevisionEntity::getError, null));
         var ids = Arrays.stream(revision.getFindingIds().split(",")).map(Long::valueOf).toList();
+        // 确认远端已有提案就占用发现，无需等到合并。再次同步时保留已有归属。
         findings.update(null, Wrappers.<FindingEntity>lambdaUpdate()
                 .eq(FindingEntity::getProjectId, revision.getProjectId())
                 .in(FindingEntity::getId, ids)
