@@ -24,6 +24,7 @@ public class ModelReviewer implements Reviewer {
         }
         List<CommentDraft> accepted = new ArrayList<>();
         for (CommentDraft draft : result.drafts()) {
+            // 未选出 spec 文档时丢弃这一类别的草稿，其他类别仍按正常规则校验。
             if (draft != null && "spec".equals(draft.category()) && request.spec().skipped()) { continue; }
             if (draft == null || draft.category() == null || !CATEGORIES.contains(draft.category())
                     || draft.commentBody() == null || draft.commentBody().isBlank()
@@ -46,6 +47,7 @@ public class ModelReviewer implements Reviewer {
         return new ReviewFindings(List.copyOf(accepted), List.copyOf(result.resolvedDiscussionIds()), List.copyOf(declined));
     }
 
+    /** 模型只能引用本次请求列出的历史讨论，避免复审时操作无关的评论。 */
     private static void requireKnownDiscussion(ReviewRequest request, Long discussionId) {
         if (discussionId == null || discussionId <= 0
                 || request.priorFindings().stream().noneMatch(prior -> prior.discussionId() == discussionId)) {

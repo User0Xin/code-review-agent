@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/** 在旧数据库上补充字段，保留已有审查记录与发现。 */
+/** 建表脚本不会更新已存在的表；启动时检查旧表的列，只补缺失字段，保留已有审查数据。 */
 @Component
 @DependsOnDatabaseInitialization
 public class ReviewDatabaseMigration implements InitializingBean {

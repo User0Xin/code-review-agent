@@ -4,7 +4,6 @@ import com.agent.codereviewagent.service.CodingStandardPicker;
 import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -29,7 +28,6 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -410,7 +408,6 @@ class GitlabTransportWebhookTest {
                 return new Reviewer.ReviewFindings(drafts, resolved);
             };
         }
-        @Bean @Primary WorkItemClient transportWorkItems() { return id -> Optional.empty(); }
         @Bean @Primary SpecDocumentPicker transportSpecPicker() { return paths -> List.of(); }
         @Bean @Primary CodingStandardPicker transportStandardsPicker() { return paths -> List.of(); }
     }

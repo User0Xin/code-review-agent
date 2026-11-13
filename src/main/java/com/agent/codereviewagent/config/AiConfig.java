@@ -1,15 +1,8 @@
 package com.agent.codereviewagent.config;
 
-import com.agent.codereviewagent.tool.CourseTools;
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
-import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.RestClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,6 +11,7 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import java.net.http.HttpClient;
 import java.time.Duration;
 
+/** 配置评审模型请求使用的 HTTP 客户端，使其兼容本地模型网关。 */
 @Configuration
 public class AiConfig {
 
@@ -43,6 +37,7 @@ public class AiConfig {
                 if (sanitized == null) {
                     sanitized = new byte[0];
                 }
+                // 删除字段后，请求头里的长度也要与实际发送的字节数一致。
                 request.getHeaders().setContentLength(sanitized.length);
                 return execution.execute(request, sanitized);
             });
@@ -69,38 +64,6 @@ public class AiConfig {
         catch (Exception ignored) {
             return body;
         }
-    }
-
-    @Bean
-    ChatClient chatClient(ChatClient.Builder builder) {
-        return builder
-                .defaultSystem("你是简洁的中文助手。直接回答用户的问题。")
-                .build();
-    }
-
-    @Bean
-    ReactAgent courseAgent(ChatModel chatModel,
-                           CourseTools courseTools,
-                           @Value("${demo.tools-enabled:false}") boolean toolsEnabled) {
-        var builder = ReactAgent.builder()
-                .name("course_agent")
-                .description("回答 Spring AI Alibaba 课程问题，需要事实时调用工具")
-                .model(chatModel)
-                .saver(new MemorySaver())
-                .hooks(ModelCallLimitHook.builder().runLimit(8).build())
-                .enableLogging(true);
-        if (toolsEnabled) {
-            builder.systemPrompt("""
-                            你是 Spring AI Alibaba 课程顾问，用中文回答。
-                            查询课程说明或当前时间时必须调用工具，不要编造课表或时间。
-                            记住同一会话里用户说过的名字和偏好。
-                            """)
-                    .methodTools(courseTools);
-        }
-        else {
-            builder.systemPrompt("你是简洁的中文助手。直接回答，并记住同一会话里用户说过的内容。");
-        }
-        return builder.build();
     }
 
 }

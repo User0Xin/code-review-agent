@@ -6,7 +6,6 @@ import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
 import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.ReviewRecordService;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -207,6 +206,5 @@ class ModelReviewWebhookTest {
     @TestConfiguration
     static class Fakes {
         @Bean @Primary ReviewGitlab modelReviewGitlab() { return new ReviewGitlab(); }
-        @Bean @Primary WorkItemClient modelReviewWorkItems() { return id -> Optional.empty(); }
     }
 }

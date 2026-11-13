@@ -78,6 +78,7 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         if (active.isPresent()) {
             CodingStandardRevisionEntity revision = active.get();
             if ("PREPARING".equals(revision.getState())) {
+                // 上次请求可能已在 GitLab 创建修订，但本地没有收到响应。先找回它，再决定是否重审依据。
                 var recovered = client.findBySourceBranch(projectId, revision.getSourceBranch());
                 if (recovered.isPresent()) {
                     records.complete(revision, recovered.get());
@@ -103,6 +104,7 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         }
         List<FindingEntity> candidates = findings.findUnconsumed(projectId);
         var checkpoint = records.checkpoint(projectId);
+        // 平时先数检查点之后的候选，达到门槛才读取讨论；待重试的批次无需等待新增发现。
         long newCount = candidates.stream().filter(f -> f.getId() > checkpoint.getLastFindingId()).count();
         if (candidates.isEmpty() || (!Boolean.TRUE.equals(checkpoint.getRetryPending())
                 && newCount < properties.getNewFindingsThreshold())) { return; }
@@ -111,6 +113,7 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         long eligibleNew = eligible.stream().filter(f -> f.getId() > checkpoint.getLastFindingId()).count();
         boolean retryQualified = false;
         if (Boolean.TRUE.equals(checkpoint.getRetryPending()) && checkpoint.getRetryFindingIds() != null) {
+            // 同批已用于修订的发现仍计入门槛；其余发现要以最新回复为准，只有未被判为误报的才计数。
             Set<Long> positive = eligible.stream().map(FindingEntity::getId).collect(Collectors.toSet());
             var basis = Arrays.stream(checkpoint.getRetryFindingIds().split(",")).map(Long::valueOf).toList();
             retryQualified = findings.listByIds(basis).stream()
@@ -130,6 +133,7 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         Proposal proposal = validate(result, eligible, snapshot.documents());
         long last = candidates.stream().mapToLong(FindingEntity::getId).max().orElse(checkpoint.getLastFindingId());
         if (proposal.files().isEmpty()) {
+            // 正常没有可改内容时等待新发现；有替换未通过校验时保留本批的重试机会。
             records.checkpoint(projectId, last, proposal.rejected());
             return;
         }
@@ -182,6 +186,7 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
                 .filter(r -> r != null && r.group() != null && !r.group().isBlank()
                         && r.findingIds() != null && !r.findingIds().isEmpty() && eligible.containsAll(r.findingIds())).toList();
         Map<Long, Set<String>> owners = new HashMap<>();
+        // 一条发现不能同时支撑多个分组；同组引用多次也只算一条，用于判断该组是否达到数量门槛。
         classified.forEach(r -> r.findingIds().forEach(id -> owners.computeIfAbsent(id, ignored -> new HashSet<>()).add(r.group())));
         classified = classified.stream().filter(r -> r.findingIds().stream().allMatch(id -> owners.get(id).size() == 1)).toList();
         Map<String, Set<Long>> groups = new HashMap<>();
@@ -194,6 +199,7 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
             if (groups.get(r.group()).size() < properties.getMinimumGroupSize()) { continue; }
             String content = contents.get(r.path());
             int start = content == null || r.original() == null || r.original().isEmpty() ? -1 : content.indexOf(r.original());
+            // 原文必须能唯一定位；若原文就是整份文件，只允许在保留全文的基础上追加。
             if (start < 0 || r.replacement() == null || r.replacement().isBlank() || r.reason() == null || r.reason().isBlank()
                     || content.indexOf(r.original(), start + 1) >= 0 || r.original().equals(r.replacement())
                     || (r.original().equals(content) && !r.replacement().startsWith(content))) {
@@ -215,6 +221,7 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
         patches.forEach((path, changes) -> {
             if (changes.isEmpty()) { return; }
             StringBuilder content = new StringBuilder(contents.get(path));
+            // 所有坐标都来自原文；先替换靠后的片段，以免前一处的长度变化挪动后续坐标。
             changes.stream().sorted(Comparator.comparingInt(Patch::start).reversed())
                     .forEach(p -> content.replace(p.start(), p.end(), p.text()));
             files.put(path, content.toString());

@@ -14,12 +14,12 @@ public record MergeRequestWebhookRequest(
     public record Project(Long id) {
     }
 
+    /** iid 是项目内的合并请求编号；更新事件用 oldrev 判断是否有代码变动，用 lastCommit 核对待审查的提交。 */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ObjectAttributes(
             String action,
             Long iid,
             String oldrev,
-            @JsonProperty("source_branch") String sourceBranch,
             String description,
             @JsonProperty("last_commit") Commit lastCommit) {
     }
