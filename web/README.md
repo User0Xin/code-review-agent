@@ -8,6 +8,8 @@
 
 仓库和 Skill API 需要后端设置独立的 `REVIEW_WORKBENCH_TOKEN`。打开工作台后输入这个令牌即可；令牌只保存在当前标签页的 sessionStorage，点击“锁定工作台”清除。不要输入 GitHub/GitLab 平台令牌。
 
+在“评审任务”选择仓库并填写 PR（GitHub）或 MR（GitLab）编号，提交后列表展示服务端记录、触发来源和执行结果。活动任务自动更新；窗口隐藏时暂停轮询，返回页面可手动刷新。
+
 视觉参考 [原工作台](https://github.com/User0Xin/code-review-agent/tree/5b3108263cc21726a71d60a6f378dad48e2c28d4/apps/web)，使用 Vue 实现导航和移动端菜单，无须 React 依赖。
 
 验证：`npm run lint:check`、`npm run format:check`、`npm run build`（包含类型检查）。

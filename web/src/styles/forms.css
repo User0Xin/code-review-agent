@@ -2,6 +2,17 @@
   display: grid;
   gap: 20px;
 }
+.repository-dialog {
+  width: min(620px, calc(100% - 24px));
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+}
+.repository-dialog::backdrop {
+  background: rgb(24 29 26 / 38%);
+}
 .panel {
   border: 1px solid var(--line);
   border-radius: 9px;

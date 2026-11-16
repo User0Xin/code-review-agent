@@ -2,6 +2,9 @@ package com.agent.codereviewagent.controller;
 
 import com.agent.codereviewagent.config.GithubProperties;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
+import com.agent.codereviewagent.service.RepositoryProfiles;
+import com.agent.codereviewagent.service.RepositoryProfile;
+import com.agent.codereviewagent.service.WorkbenchJobs;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,11 +23,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.HexFormat;
 import java.util.Queue;
+import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -38,6 +44,8 @@ class GithubWebhookControllerTest {
             """;
     private final GithubProperties properties = new GithubProperties();
     private final MergeRequestReviewService review = mock(MergeRequestReviewService.class);
+    private final RepositoryProfiles profiles = mock(RepositoryProfiles.class);
+    private final WorkbenchJobs jobs = mock(WorkbenchJobs.class);
     private final Queue<Runnable> queue = new ArrayDeque<>();
     private MockMvc mvc;
 
@@ -60,6 +68,20 @@ class GithubWebhookControllerTest {
         assertThat(queue).hasSize(1);
         queue.remove().run();
         verify(review).acceptGithub(42, 9, action, "审查说明", "abc123");
+    }
+
+    @Test
+    void onlyTheRegisteredNameAndNumericIdCanEnterTheSharedWorkbenchQueue() throws Exception {
+        var profile = new RepositoryProfile(5, "github", 73, "team/other", "https://github.com/team/other",
+                List.of(), List.of(), List.of());
+        when(profiles.find("github", 73)).thenReturn(Optional.of(profile));
+        String registered = PAYLOAD.replace("42", "73").replace(REPOSITORY, "team/other");
+        String wrongName = registered.replace("team/other", "team/wrong");
+        send("pull_request", wrongName, sign(wrongName)).andExpect(status().isOk());
+        verifyNoInteractions(jobs);
+        send("pull_request", registered, sign(registered)).andExpect(status().isOk()); // 旧提交由任务服务忽略
+        verify(jobs).webhook(profile, 9, "abc123");
+        verifyNoInteractions(review);
     }
 
     @Test
@@ -105,7 +127,8 @@ class GithubWebhookControllerTest {
 
     private MockMvc mockMvc(TaskExecutor executor) {
         return MockMvcBuilders.standaloneSetup(
-                new GithubWebhookController(properties, new ObjectMapper(), review, executor)).build();
+                new GithubWebhookController(properties, new ObjectMapper(), review, executor,
+                        profiles, jobs)).build();
     }
 
     private ResultActions send(String event, String payload, String signature) throws Exception {

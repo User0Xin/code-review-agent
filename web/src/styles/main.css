@@ -1,5 +1,6 @@
 @import './base.css';
 @import './forms.css';
+@import './jobs.css';
 .shell {
   display: grid;
   grid-template-columns: 228px minmax(0, 1fr);
