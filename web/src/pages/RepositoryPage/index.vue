@@ -55,6 +55,7 @@ async function startNew() {
         v-if="!adding"
         :key="repositories.selectedId ?? 'new'"
         :repository="repositories.current"
+        :can-cancel="false"
         @saved="saved"
       />
       <SkillSettings
