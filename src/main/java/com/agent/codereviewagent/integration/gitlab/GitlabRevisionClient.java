@@ -181,7 +181,8 @@ public class GitlabRevisionClient implements RevisionClient {
     }
 
     private String project(long projectId) {
-        if (properties.getProjectId() <= 0 || properties.getProjectId() != projectId) {
+        if (projectId <= 0 || (properties.getProjectId() != projectId
+                && !com.agent.codereviewagent.service.ReviewPolicy.gitlabMatches(projectId))) {
             throw new IllegalStateException("修订项目与配置的被审查仓库不一致");
         }
         return "/projects/" + projectId;

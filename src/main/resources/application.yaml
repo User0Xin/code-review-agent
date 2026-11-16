@@ -12,7 +12,7 @@ spring:
   sql:
     init:
       mode: always
-      schema-locations: classpath:db/schema.sql
+      schema-locations: classpath:db/schema.sql,classpath:db/repository-profiles.sql
   ai:
     retry:
       # 包含首次调用：临时连接故障最多再试五次，每次间隔 1、2、4、8、8 秒。

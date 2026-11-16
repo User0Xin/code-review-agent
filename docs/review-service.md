@@ -4,6 +4,8 @@
 
 本文描述已实现的配置与恢复机制。本地测试中的 GitLab 和模型由替身提供；测试通过不代表已经配置真实凭据、登记线上 webhook、部署服务或执行过真实审查。
 
+浏览器管理入口、按仓库配置文档位置和导入指令，见[代码评审工作台](workbench.md)。下方单仓库配置仍可用于原有 webhook 接入。
+
 ## 部署配置
 
 配置定义见 [application.yaml](../src/main/resources/application.yaml)。需要 JDK 21、Maven、可读写的持久化目录，以及能访问 GitLab 和模型服务的网络。

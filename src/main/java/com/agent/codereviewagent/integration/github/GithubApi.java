@@ -20,21 +20,34 @@ import java.util.stream.Collectors;
 final class GithubApi {
     private final GithubProperties properties;
     private final ObjectMapper json;
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
-            .version(HttpClient.Version.HTTP_1_1).build();
+    private final HttpClient http;
+    private final long boundId;
+    private final String boundName;
 
     GithubApi(GithubProperties properties, ObjectMapper json) {
+        this(properties, json, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
+                .version(HttpClient.Version.HTTP_1_1).build(), 0, null);
+    }
+
+    private GithubApi(GithubProperties properties, ObjectMapper json, HttpClient http, long boundId, String boundName) {
         this.properties = properties;
         this.json = json;
+        this.http = http;
+        this.boundId = boundId;
+        this.boundName = boundName;
+    }
+
+    GithubApi bound(long id, String name) {
+        return new GithubApi(properties, json, http, id, name);
     }
 
     ObjectNode object() { return json.createObjectNode(); }
 
     String repository(long repositoryId) {
-        if (repositoryId <= 0 || repositoryId != properties.getRepositoryId()) {
+        if (repositoryId <= 0 || repositoryId != (boundName == null ? properties.getRepositoryId() : boundId)) {
             throw new IllegalStateException("GitHub 仓库编号与配置不符");
         }
-        String name = properties.getRepository();
+        String name = boundName == null ? properties.getRepository() : boundName;
         if (name == null || !name.matches("[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")) {
             throw new IllegalStateException("GitHub 仓库配置应为 owner/repo");
         }

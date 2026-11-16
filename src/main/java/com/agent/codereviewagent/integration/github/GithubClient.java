@@ -23,8 +23,32 @@ public class GithubClient implements RepositoryClient {
     private final GithubReviewThreads threads;
 
     public GithubClient(GithubProperties properties, ObjectMapper json) {
-        api = new GithubApi(properties, json);
+        this(new GithubApi(properties, json));
+    }
+
+    private GithubClient(GithubApi api) {
+        this.api = api;
         threads = new GithubReviewThreads(api);
+    }
+
+    @Override
+    public long resolveId(String fullName) {
+        JsonNode repo = api.get("/repos/" + GithubApi.path(fullName));
+        if (!fullName.equalsIgnoreCase(required(repo, "full_name")) || !repo.path("id").canConvertToLong()
+                || !repo.path("id").isIntegralNumber()) { throw new IllegalStateException("GitHub 仓库身份不匹配"); }
+        return repo.path("id").asLong();
+    }
+
+    @Override
+    public RepositoryClient bound(long id, String fullName) {
+        if (resolveId(fullName) != id) { throw new IllegalStateException("GitHub 仓库数字身份已改变"); }
+        return new GithubClient(api.bound(id, fullName));
+    }
+
+    @Override
+    public Change change(long id, long number) {
+        JsonNode pr = api.get(pull(id, number));
+        return new Change(refs(pr).orElseThrow(() -> new IllegalStateException("PR 的 diff 未就绪")),pr.path("body").asText(""));
     }
 
     private String repository(long id) { return "/repos/" + GithubApi.path(api.repository(id)); }
