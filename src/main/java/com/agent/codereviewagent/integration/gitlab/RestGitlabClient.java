@@ -1,6 +1,7 @@
 package com.agent.codereviewagent.integration.gitlab;
 
 import com.agent.codereviewagent.config.GitlabProperties;
+import com.agent.codereviewagent.service.DiffNotReadyException;
 import com.agent.codereviewagent.service.DiffVersionChangedException;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,18 +27,46 @@ public class RestGitlabClient implements GitlabClient {
 
     private final GitlabProperties properties;
     private final ObjectMapper json;
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10)).version(HttpClient.Version.HTTP_1_1).build();
+    private final HttpClient http;
+    private final Long boundProject;
     private Long currentUserId;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public RestGitlabClient(GitlabProperties properties, ObjectMapper json) {
+        this(properties, json, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
+                .version(HttpClient.Version.HTTP_1_1).build(), null);
+    }
+    private RestGitlabClient(GitlabProperties properties, ObjectMapper json, HttpClient http, Long boundProject) {
         this.properties = properties;
         this.json = json;
+        this.http = http;
+        this.boundProject = boundProject;
+    }
+
+    @Override
+    public long resolveId(String fullName) {
+        JsonNode project = get("/projects/" + encode(fullName));
+        if (!fullName.equalsIgnoreCase(project.path("path_with_namespace").asText()) || !project.path("id").isIntegralNumber()
+                || !project.path("id").canConvertToLong()) { throw new IllegalStateException("GitLab 仓库身份不匹配"); }
+        return project.path("id").asLong();
+    }
+
+    @Override
+    public GitlabClient bound(long id, String fullName) { return new RestGitlabClient(properties,json,http,id); }
+
+    @Override
+    public Change change(long id, long number) {
+        JsonNode mr = get(mergeRequest(id,number));
+        return new Change(refs(mr).orElseThrow(DiffNotReadyException::new), mr.path("description").asText(""));
     }
 
     @Override
     public Optional<DiffRefs> diffRefs(long projectId, long mergeRequestIid) {
-        JsonNode refs = get(mergeRequest(projectId, mergeRequestIid)).path("diff_refs");
+        return refs(get(mergeRequest(projectId, mergeRequestIid)));
+    }
+
+    private static Optional<DiffRefs> refs(JsonNode mr) {
+        JsonNode refs = mr.path("diff_refs");
         if (refs.path("head_sha").asText().isBlank()
                 || refs.path("base_sha").asText().isBlank()
                 || refs.path("start_sha").asText().isBlank()) {
@@ -244,7 +273,8 @@ public class RestGitlabClient implements GitlabClient {
     }
 
     private String project(long projectId) {
-        if (properties.getProjectId() <= 0 || properties.getProjectId() != projectId) {
+        if (projectId <= 0 || (projectId != (boundProject == null ? properties.getProjectId() : boundProject)
+                && !com.agent.codereviewagent.service.ReviewPolicy.gitlabMatches(projectId))) {
             throw new IllegalStateException("webhook 项目与配置的被审查仓库不一致");
         }
         return "/projects/" + projectId;

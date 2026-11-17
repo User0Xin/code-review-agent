@@ -39,4 +39,7 @@ public class ReviewRecordEntity {
     /** 写入或清理失败说明时的错误；reason 仍记录审查本身的失败原因。 */
     private String noteError;
     private String failureDetail;
+    /** 本轮实际成功写回的新评论数，供工作台生成持久化结果摘要；不从历史相似发现估算。 */
+    @TableField(exist = false)
+    private int publishedCount;
 }

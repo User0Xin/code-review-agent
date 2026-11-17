@@ -30,7 +30,9 @@ public class CodingStandardSource {
         String ref = repository.branchHead(projectId, branch);
         List<String> candidates = repository.listFiles(projectId, ref).stream().filter(CodingStandardSource::document).toList();
         List<Reviewer.StandardDocument> documents = new ArrayList<>();
-        for (String path : picker.pick(candidates)) {
+        var locations = ReviewPolicy.standardPaths();
+        List<String> selected = locations.isEmpty() ? picker.pick(candidates) : ReviewDocuments.select(locations,candidates);
+        for (String path : selected) {
             if (candidates.contains(path) && documents.stream().noneMatch(item -> item.path().equals(path))) {
                 documents.add(new Reviewer.StandardDocument(path, repository.readFile(projectId, path, ref)));
             }

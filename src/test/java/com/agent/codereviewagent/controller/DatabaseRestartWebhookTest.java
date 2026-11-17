@@ -75,6 +75,15 @@ class DatabaseRestartWebhookTest {
             assertThat(jdbc.queryForObject("SELECT state FROM coding_standard_revision", String.class)).isEqualTo("OPEN");
             savedRevision = revisionState(jdbc);
             assertThat(REVISIONS.requests).hasSize(1);
+            jdbc.update("INSERT INTO repository_profile(id,platform,remote_id,full_name,url,standard_paths,spec_paths) "
+                    + "VALUES(1,'github',73,'team/legacy','https://github.com/team/legacy','[\"coding.md\"]','[]')");
+            jdbc.update("INSERT INTO repository_skill(profile_id,slot,content,enabled) VALUES(1,'review','历史指令',1)");
+            for (String state : List.of("QUEUED", "RUNNING", "SUCCEEDED", "FAILED")) {
+                jdbc.update("INSERT INTO workbench_job(repository_id,change_number,head_sha,base_sha,start_sha,status,"
+                        + "source,created_at,finished_at,message) VALUES(1,3,?,'base','start',?,'manual',?,?,?)",
+                        state, state, "2026-10-15T09:00:00Z",
+                        List.of("SUCCEEDED", "FAILED").contains(state) ? "2026-10-15T10:00:00Z" : null, "历史结果");
+            }
         }
 
         GITLAB.head = "second-head";
@@ -82,6 +91,16 @@ class DatabaseRestartWebhookTest {
             JdbcTemplate jdbc = second.getBean(JdbcTemplate.class);
             // 先检查重启后的原样状态，再发送第二次 webhook。
             assertHistoricalRows(jdbc);
+            assertThat(jdbc.queryForObject("SELECT full_name FROM repository_profile WHERE id=1", String.class))
+                    .isEqualTo("team/legacy");
+            assertThat(jdbc.queryForObject("SELECT content FROM repository_skill WHERE profile_id=1", String.class))
+                    .isEqualTo("历史指令");
+            assertThat(jdbc.queryForList("SELECT status FROM workbench_job ORDER BY id", String.class))
+                    .containsExactly("FAILED", "FAILED", "SUCCEEDED", "FAILED");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM workbench_job WHERE finished_at IS NOT NULL", Integer.class))
+                    .isEqualTo(4);
+            assertThat(jdbc.queryForObject("SELECT message FROM workbench_job WHERE head_sha='SUCCEEDED'", String.class))
+                    .isEqualTo("历史结果");
             assertThat(count(jdbc, "review_record")).isEqualTo(3);
             assertThat(count(jdbc, "finding")).isEqualTo(2);
             assertThat(revisionState(jdbc)).isEqualTo(savedRevision);
@@ -128,7 +147,8 @@ class DatabaseRestartWebhookTest {
                  "last_commit":{"id":"%s"}}}
                 """.formatted(action, head);
         var request = context.getBean(ObjectMapper.class).readValue(payload, MergeRequestWebhookRequest.class);
-        var result = context.getBean(ReviewWebhookController.class).receive("Merge Request Hook", request);
+        var result = context.getBean(ReviewWebhookController.class).receive("Merge Request Hook", null, request,
+                new org.springframework.mock.web.MockHttpServletResponse());
         assertThat(result.getCode()).isEqualTo(ResultCode.SUCCESS);
     }
 

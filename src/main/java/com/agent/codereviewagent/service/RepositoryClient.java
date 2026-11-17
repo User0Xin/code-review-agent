@@ -8,6 +8,17 @@ public interface RepositoryClient {
 
     Optional<DiffRefs> diffRefs(long projectId, long mergeRequestIid);
 
+    /** 平台适配器通过受信任 API 解析仓库身份。 */
+    default long resolveId(String fullName) { throw new UnsupportedOperationException("平台不支持解析仓库身份"); }
+
+    /** 独立适配器固定仓库身份，不修改已有 webhook 适配器的全局设置。 */
+    default RepositoryClient bound(long id, String fullName) { return this; }
+
+    record Change(DiffRefs refs, String description) {}
+    default Change change(long id, long number) {
+        return new Change(diffRefs(id, number).orElseThrow(DiffNotReadyException::new), "");
+    }
+
     default String readDiff(long projectId, long mergeRequestIid, String headSha) {
         return "";
     }

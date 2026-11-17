@@ -73,3 +73,22 @@ CREATE TABLE IF NOT EXISTS revision_checkpoint (
     retry_pending INTEGER NOT NULL DEFAULT 0,
     retry_finding_ids TEXT
 );
+
+-- 保存整组 diff 引用：即使源分支不变，目标分支变化也属于另一版审查。
+CREATE TABLE IF NOT EXISTS workbench_job (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repository_id INTEGER NOT NULL,
+    change_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    start_sha TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('QUEUED','RUNNING','SUCCEEDED','FAILED')),
+    source TEXT NOT NULL,
+    message TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_workbench_job_history ON workbench_job(repository_id, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workbench_job_active
+    ON workbench_job(repository_id, change_number, head_sha, base_sha, start_sha)
+    WHERE status IN ('QUEUED','RUNNING');

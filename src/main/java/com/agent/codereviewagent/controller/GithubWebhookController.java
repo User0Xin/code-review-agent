@@ -4,6 +4,8 @@ import com.agent.codereviewagent.common.Result;
 import com.agent.codereviewagent.config.GithubProperties;
 import com.agent.codereviewagent.models.dto.GithubPullRequestWebhookRequest;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
+import com.agent.codereviewagent.service.RepositoryProfiles;
+import com.agent.codereviewagent.service.WorkbenchJobs;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -38,13 +40,18 @@ public class GithubWebhookController {
     private final ObjectMapper json;
     private final MergeRequestReviewService review;
     private final TaskExecutor executor;
+    private final RepositoryProfiles repositories;
+    private final WorkbenchJobs jobs;
 
     public GithubWebhookController(GithubProperties properties, ObjectMapper json, MergeRequestReviewService review,
-                                   @Qualifier("githubWebhookExecutor") TaskExecutor executor) {
+                                   @Qualifier("githubWebhookExecutor") TaskExecutor executor,
+                                   RepositoryProfiles repositories, WorkbenchJobs jobs) {
         this.properties = properties;
         this.json = json;
         this.review = review;
         this.executor = executor;
+        this.repositories = repositories;
+        this.jobs = jobs;
     }
 
     @PostMapping(path = "/pull-requests", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -56,13 +63,25 @@ public class GithubWebhookController {
             return Result.success();
         }
         var webhook = parsePullRequest(payload);
-        if (webhook == null || !matchesRepository(webhook.repository()) || !triggersReview(webhook.action())) {
+        if (webhook == null || webhook.repository() == null || webhook.repository().id() == null
+                || webhook.repository().id() <= 0 || webhook.repository().fullName() == null
+                || !triggersReview(webhook.action())) {
             return Result.success();
         }
+        var registered = repositories.find("github", webhook.repository().id());
+        if (registered.isPresent()
+                ? !registered.get().fullName().equalsIgnoreCase(webhook.repository().fullName())
+                : !matchesRepository(webhook.repository())) { return Result.success(); }
         var pr = webhook.pullRequest();
         if (webhook.number() == null || webhook.number() <= 0
                 || pr == null || pr.head() == null || pr.head().sha() == null || pr.head().sha().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "GitHub webhook 缺少 PR 编号或提交");
+        }
+        if (registered.isPresent()) {
+            if (jobs.webhook(registered.get(), webhook.number(), pr.head().sha()) != null) {
+                response.setStatus(HttpStatus.ACCEPTED.value());
+            }
+            return Result.success();
         }
         try {
             executor.execute(() -> startReview(webhook));
