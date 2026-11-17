@@ -14,6 +14,10 @@ import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.MergeRequestReviewService;
 import com.agent.codereviewagent.service.RepositoryClient;
+import com.agent.codereviewagent.service.RepositoryProfiles;
+import com.agent.codereviewagent.service.RepositoryAccess;
+import com.agent.codereviewagent.service.ReviewPolicy;
+import com.agent.codereviewagent.service.ReviewDocuments;
 import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
@@ -48,6 +52,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private final Sleeper sleeper;
     private final DiffWaitProperties diffWait;
     private final GitlabProperties gitlabProperties;
+    private final RepositoryProfiles profiles;
+    private final RepositoryAccess access;
 
     public MergeRequestReviewServiceImpl(GitlabClient gitlabClient,
                                          Reviewer reviewer,
@@ -61,7 +67,9 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                                          DiffWaitProperties diffWait,
                                          GitlabProperties gitlabProperties,
                                          @Qualifier("githubClient") RepositoryClient githubClient,
-                                         GithubProperties githubProperties) {
+                                         GithubProperties githubProperties, RepositoryProfiles profiles, RepositoryAccess access) {
+        this.profiles = profiles;
+        this.access = access;
         this.gitlabClient = gitlabClient;
         this.githubClient = githubClient;
         this.githubProperties = githubProperties;
@@ -97,8 +105,15 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 || (gitlabProperties.getProjectId() > 0 && gitlabProperties.getProjectId() != projectId)) {
             return;
         }
-        ReviewContext context = new ReviewContext(gitlabClient, projectId, projectId, mergeRequestIid, attributes.action());
         String expected = attributes.lastCommit() == null ? null : attributes.lastCommit().id();
+        // 未配置固定项目时，旧 webhook 不能通过工作台绑定扩大其原有写入权限。
+        var configured = gitlabProperties.getProjectId() > 0 ? profiles.find("gitlab",projectId)
+                : java.util.Optional.<com.agent.codereviewagent.service.RepositoryProfile>empty();
+        if (configured.isPresent()) {
+            runProfile(configured.get().id(), mergeRequestIid, attributes.action(), attributes.description(), expected, null);
+            return;
+        }
+        ReviewContext context = new ReviewContext(gitlabClient, projectId, projectId, mergeRequestIid, attributes.action());
         try {
             runReview(context, attributes.description(), expected);
         }
@@ -115,31 +130,55 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                 || !List.of("opened", "reopened", "synchronize").contains(action)) { return; }
         // SQLite 历史记录以正数 GitLab 项目编号为键。负键给 GitHub 独立的命名空间；
         // 发给平台和模型的 repositoryId 始终是平台原生的正数。
+        var configured = profiles.find("github",repositoryId);
+        if (configured.isPresent()) {
+            runProfile(configured.get().id(), number, action, description, headSha, null);
+            return;
+        }
         runReview(new ReviewContext(githubClient, repositoryId, -repositoryId, number, action), description, headSha);
     }
 
-    private void runReview(ReviewContext context, String description, String expected) {
+    @Override
+    public synchronized ReviewRecordEntity runConfigured(long profileId, long number, String trigger, String description,
+                                                         RepositoryClient.DiffRefs expectedRefs) {
+        return runProfile(profileId, number, trigger, description, java.util.Objects.requireNonNull(expectedRefs).headSha(), expectedRefs);
+    }
+
+    private ReviewRecordEntity runProfile(long profileId,long number,String trigger,String description,
+                                          String head,RepositoryClient.DiffRefs expectedRefs) {
+        var policy = profiles.policy(profileId);
+        var profile = policy.profile();
+        var context = new ReviewContext(access.client(profile),profile.remoteId(),profile.storageId(),number,trigger);
+        context.expectedRefs = expectedRefs;
+        return policy.run(() -> {
+            var result = runReview(context,description,head);
+            if (profile.platform().equals("gitlab")) { revisions.checkAfterReview(profile.remoteId(),number); }
+            return result;
+        });
+    }
+
+    private ReviewRecordEntity runReview(ReviewContext context, String description, String expected) {
         context.headSha = expected;
         try {
-            review(context, description, expected);
+            return review(context, description, expected);
         }
         catch (DiffVersionChangedException changed) {
-            fail(context, changed.getMessage(), null);
+            return fail(context, changed.getMessage(), null);
         }
         catch (RuntimeException exception) {
-            fail(context, context.phase, exception);
+            return fail(context, context.phase, exception);
         }
     }
 
-    private void review(ReviewContext context, String mergeRequestDescription, String expected) {
+    private ReviewRecordEntity review(ReviewContext context, String mergeRequestDescription, String expected) {
         long projectId = context.projectId;
         long mergeRequestIid = context.mergeRequestIid;
         context.phase = "diff 读取失败";
         RepositoryClient.DiffRefs diffRefs = waitForDiff(context, expected);
         if (diffRefs == null) {
-            fail(context, DIFF_NOT_READY, null);
-            return;
+            return fail(context, DIFF_NOT_READY, null);
         }
+        if (context.expectedRefs != null) { context.expectedRefs.requireCurrent(java.util.Optional.of(diffRefs)); }
         context.headSha = diffRefs.headSha();
         context.phase = "已有讨论读取失败";
         List<FindingEntity> existing = findingService.findByMergeRequest(context.storageId, mergeRequestIid);
@@ -164,8 +203,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         context.phase = "讨论状态更新失败";
         resolveKnownDiscussions(context, diffRefs, priorFindings, resolved, declined);
         if (failed > 0) {
-            fail(context, "有 " + failed + " 条没能写回", null);
-            return;
+            return fail(context, "有 " + failed + " 条没能写回", null);
         }
         ReviewRecordEntity record = reviewRecord(context, null, clock.now());
         // 清理通知失败不抹掉本次成功审查，旧索引保留到下一次重试。
@@ -180,6 +218,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             }
         }
         reviewRecordService.recordSuccess(record);
+        return record;
     }
 
     /** 本轮完全相同的草稿只发布一次；单条发布失败计数后，继续处理其余草稿。 */
@@ -321,11 +360,13 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                                    Reviewer.CodingStandards standards) {
         List<Reviewer.SpecDocument> documents = new ArrayList<>();
         // spec 使用被审查提交中的文档；已作为编码规范的路径不再作为需求依据。
+        var locations = ReviewPolicy.specPaths();
         List<String> candidates = context.client.listFiles(context.projectId, headSha).stream()
-                .filter(MergeRequestReviewServiceImpl::specDocument)
+                .filter(path -> !locations.isEmpty() || specDocument(path))
                 .filter(path -> standards.documents().stream().noneMatch(document -> document.path().equals(path)))
                 .toList();
-        for (String path : specDocumentPicker.pick(candidates)) {
+        var selected = locations.isEmpty() ? specDocumentPicker.pick(candidates) : ReviewDocuments.select(locations,candidates);
+        for (String path : selected) {
             if (!candidates.contains(path) || documents.stream().anyMatch(document -> document.path().equals(path))) {
                 continue;
             }
@@ -351,7 +392,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     }
 
     /** 通知维护失败仍保存主审查结果，并保留可供下次清理的索引。 */
-    private void fail(ReviewContext context, String reason, RuntimeException failure) {
+    private ReviewRecordEntity fail(ReviewContext context, String reason, RuntimeException failure) {
         ReviewRecordEntity record = reviewRecord(context, reason, clock.now());
         if (failure != null) {
             // 保存错误类型与代码位置，不保存可能携带提示词、模型原文或凭据的异常消息。
@@ -383,6 +424,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             }
         }
         reviewRecordService.recordFailure(record, noteId);
+        return record;
     }
 
     private static ReviewRecordEntity reviewRecord(ReviewContext context, String reason, Instant occurredAt) {
@@ -413,6 +455,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         private final String trigger;
         private String headSha;
         private String phase = "审查执行失败";
+        private RepositoryClient.DiffRefs expectedRefs;
         private Reviewer.Spec spec;
         private Reviewer.CodingStandards standards;
         private ReviewContext(RepositoryClient client, long projectId, long storageId, long mergeRequestIid, String trigger) {

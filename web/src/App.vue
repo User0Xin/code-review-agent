@@ -3,6 +3,8 @@ import { nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import WorkIcon from '@/components/WorkIcon.vue'
+import WorkbenchAccess from '@/components/WorkbenchAccess.vue'
+import { setToken, workbenchToken, unlockHint } from '@/utils/session'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -18,6 +20,10 @@ function closeMenu() {
 watch(() => route.fullPath, closeMenu)
 function restoreFocus() {
   nextTick(() => menuButton.value?.focus())
+}
+function lock() {
+  unlockHint.value = ''
+  setToken('')
 }
 </script>
 <template>
@@ -48,8 +54,13 @@ function restoreFocus() {
         <span>{{ t('shell.workbench') }}</span
         ><span class="crumb-separator">/</span
         ><strong>{{ t(route.name === 'reviews' ? 'shell.jobs' : 'shell.repository') }}</strong>
+        <button v-if="workbenchToken" class="button subtle lock-button" @click="lock">
+          <WorkIcon name="lock" />锁定工作台
+        </button>
       </header>
-      <main id="main" tabindex="-1"><RouterView /></main>
+      <main id="main" tabindex="-1">
+        <WorkbenchAccess><RouterView /></WorkbenchAccess>
+      </main>
     </div>
   </div>
   <dialog ref="drawer" class="nav-dialog" :aria-label="t('shell.navigation')" @close="restoreFocus">

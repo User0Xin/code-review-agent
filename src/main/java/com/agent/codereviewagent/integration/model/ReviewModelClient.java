@@ -8,11 +8,12 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.core.io.ClassPathResource;
+import com.agent.codereviewagent.service.RepositoryProfiles;
+import com.agent.codereviewagent.service.ReviewPolicy;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+
 import java.util.List;
 import java.util.Map;
 
@@ -32,8 +33,8 @@ public class ReviewModelClient {
         String instructions;
         String request;
         try {
-            instructions = new ClassPathResource("skills/" + skill + "/SKILL.md")
-                    .getContentAsString(StandardCharsets.UTF_8);
+            instructions = ReviewPolicy.current().map(policy -> policy.instructions().get(skill))
+                    .orElseGet(() -> RepositoryProfiles.defaultSkill(skill));
             request = json.writeValueAsString(Map.of("task", task, "input", input));
         }
         catch (IOException exception) {

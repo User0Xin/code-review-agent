@@ -6,6 +6,8 @@
 
 页面在 `src/pages/<页面>/index.vue`，页面私有组件在相邻 `components/`，共享组件在 `src/components/`。页面不直接调用 Axios；请求放在 `src/requests/`，与页面展示无关的逻辑放在 `src/business/`，样式、路由、状态与语言文本沿用脚手架分层。
 
+仓库和 Skill API 需要后端设置独立的 `REVIEW_WORKBENCH_TOKEN`。打开工作台后输入这个令牌即可；令牌只保存在当前标签页的 sessionStorage，点击“锁定工作台”清除。不要输入 GitHub/GitLab 平台令牌。
+
 视觉参考 [原工作台](https://github.com/User0Xin/code-review-agent/tree/5b3108263cc21726a71d60a6f378dad48e2c28d4/apps/web)，使用 Vue 实现导航和移动端菜单，无须 React 依赖。
 
 验证：`npm run lint:check`、`npm run format:check`、`npm run build`（包含类型检查）。

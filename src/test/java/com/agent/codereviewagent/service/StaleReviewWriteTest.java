@@ -40,7 +40,8 @@ class StaleReviewWriteTest {
         doCallRealMethod().when(repo).resolveDiscussion(anyLong(), anyLong(), anyLong(), any(RepositoryClient.DiffRefs.class));
         service = new MergeRequestReviewServiceImpl(mock(GitlabClient.class), model, records, findings, paths -> List.of(),
                 standards, mock(CodingStandardRevisionService.class), Instant::now, duration -> {},
-                new DiffWaitProperties(), new GitlabProperties(), repo, properties);
+                new DiffWaitProperties(), new GitlabProperties(), repo, properties, mock(RepositoryProfiles.class),
+                mock(RepositoryAccess.class));
     }
 
     @Test
