@@ -17,6 +17,7 @@ public class FindingEntity {
 
     private Long mergeRequestIid;
 
+    /** 存的是 GitLab 讨论首条评论的数字 ID，用它可以再找到整条讨论。 */
     private Long discussionId;
 
     private String path;
@@ -33,6 +34,7 @@ public class FindingEntity {
 
     private String headSha;
 
+    /** 关联修订后，这条发现不再参与后续总结，即使修订最终未合并。 */
     private Long revisionId;
     private Boolean falsePositive;
     private String falsePositiveReason;

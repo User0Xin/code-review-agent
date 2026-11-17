@@ -37,6 +37,7 @@ public class GitlabRevisionClient implements RevisionClient {
     @Override
     public Optional<RemoteRevision> findBySourceBranch(long projectId, String sourceBranch) {
         if (blank(sourceBranch)) { throw new IllegalArgumentException("编码规范修订缺少源分支"); }
+        // 已关闭或已合并的修订也算已发布；恢复时不能为它再开一个合并请求。
         List<JsonNode> requests = list(project(projectId)
                 + "/merge_requests?scope=all&state=all&source_branch=" + encode(sourceBranch));
         return requests.stream().filter(request -> sourceBranch.equals(request.path("source_branch").asText()))
@@ -70,6 +71,7 @@ public class GitlabRevisionClient implements RevisionClient {
         String project = project(projectId);
         boolean branchExists = request("GET", project + "/repository/branches/" + encode(sourceBranch), null, true)
                 .statusCode() != 404;
+        // 提交可能已成功，但合并请求尚未创建。所有待修改文件都与预期一致时只补建合并请求。
         boolean alreadyCommitted = branchExists && containsExpectedFiles(project, sourceBranch, files);
         if (!alreadyCommitted) {
             ObjectNode commit = json.createObjectNode().put("branch", sourceBranch)

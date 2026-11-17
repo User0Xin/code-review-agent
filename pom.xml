@@ -32,7 +32,6 @@
         <archunit.version>1.5.1</archunit.version>
         <sqlite-jdbc.version>3.53.4.0</sqlite-jdbc.version>
         <spring-ai.version>1.1.2</spring-ai.version>
-        <spring-ai-alibaba.version>1.1.2.2</spring-ai-alibaba.version>
     </properties>
 
     <dependencyManagement>
@@ -41,13 +40,6 @@
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
                 <version>${spring-ai.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>com.alibaba.cloud.ai</groupId>
-                <artifactId>spring-ai-alibaba-bom</artifactId>
-                <version>${spring-ai-alibaba.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -86,12 +78,7 @@
             <version>${archunit.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- Spring AI Alibaba Agent Framework -->
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-agent-framework</artifactId>
-        </dependency>
-        <!-- OpenAI 兼容协议的 ChatModel。换成通义千问时，改用 spring-ai-alibaba-starter-dashscope。 -->
+        <!-- 代码评审使用的 OpenAI 兼容 ChatModel。 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>

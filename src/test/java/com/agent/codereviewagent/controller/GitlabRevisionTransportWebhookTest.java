@@ -6,7 +6,6 @@ import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.RevisionSummarizer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -296,7 +295,6 @@ class GitlabRevisionTransportWebhookTest {
         }
         @Bean @Primary GitlabClient revisionTransportGitlab() { return GITLAB; }
         @Bean @Primary Reviewer revisionTransportReviewer() { return request -> Reviewer.ReviewFindings.of(drafts); }
-        @Bean @Primary WorkItemClient revisionTransportWorkItems() { return id -> Optional.empty(); }
         @Bean @Primary SpecDocumentPicker revisionTransportSpecPicker() { return paths -> List.of(); }
         @Bean @Primary CodingStandardPicker revisionTransportStandards() { return paths -> List.of(PATH); }
         @Bean @Primary RevisionSummarizer revisionTransportSummary() {

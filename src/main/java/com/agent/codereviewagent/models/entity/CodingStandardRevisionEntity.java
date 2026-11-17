@@ -14,9 +14,11 @@ public class CodingStandardRevisionEntity {
     private Long projectId;
     private String sourceBranch;
     private String targetBranch;
+    /** 读取规范时固定的提交。重试创建修订时仍基于这一版文件。 */
     private String baseRef;
     private Long mergeRequestIid;
     private String state;
+    /** 键是规范文件路径，值是替换后的完整正文；中断后可据此恢复远端提交。 */
     private String filesJson;
     private String findingIds;
     private String title;

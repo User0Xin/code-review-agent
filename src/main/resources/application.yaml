@@ -13,32 +13,33 @@ spring:
     init:
       mode: always
       schema-locations: classpath:db/schema.sql
-  mvc:
-    async:
-      request-timeout: 120s
   ai:
-    # 上游返回 502 时不要连着重试，否则接口会卡住几十秒。
     retry:
-      max-attempts: 1
+      # 包含首次调用：临时连接故障最多再试五次，每次间隔 1、2、4、8、8 秒。
+      max-attempts: 6
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+        max-interval: 8s
     openai:
       # 也可用环境变量覆盖：OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL
-      api-key: ${OPENAI_API_KEY:pwd}
+      api-key: ${OPENAI_API_KEY:dev}
       # Spring AI 会在这个地址后拼接 /v1/chat/completions。
-      # 服务若提供 http://localhost:8080/v1/chat/completions，这里填到端口即可，不要再写 /v1。
-      base-url: ${OPENAI_BASE_URL:http://localhost:8080}
+      # 使用官方 API 时填写根地址，不要重复添加 /v1。
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       chat:
         options:
           # 必须是该服务 /v1/models 里真实存在的模型名。
-          # 不要设置 temperature：当前 Codex 网关会把 temperature 当成非法提示词拒绝。
-          model: ${OPENAI_MODEL:gpt-5.6-sol}
-
-# 当前 gpt-6.1-sol 的 tool_mode 是 code_mode_only，不接受 OpenAI function tools。
-# 换成支持函数调用的模型（如百炼 qwen-plus）后，把这里改成 true。
-demo:
-  tools-enabled: false
+          # 不显式设置 temperature，沿用模型默认值。
+          model: ${OPENAI_MODEL:gpt-6.1-sol}
 
 # diff 未就绪时的重试。超过 max-attempts 后留下一条失败概览讨论。
 review:
+  github:
+    repository: ${REVIEW_GITHUB_REPOSITORY:User0Xin/code-review-agent}
+    repository-id: ${REVIEW_GITHUB_REPOSITORY_ID:1418627378}
+    token: ${REVIEW_GITHUB_TOKEN:}
+    webhook-secret: ${REVIEW_GITHUB_WEBHOOK_SECRET:}
   revision:
     new-findings-threshold: ${REVIEW_REVISION_N:20}
     minimum-group-size: ${REVIEW_REVISION_M:3}
@@ -46,13 +47,6 @@ review:
     base-url: ${GITLAB_BASE_URL:}
     token: ${GITLAB_TOKEN:}
     project-id: ${GITLAB_PROJECT_ID:0}
-    request-timeout: 30s
-  feishu-project:
-    base-url: ${FEISHU_PROJECT_BASE_URL:https://project.feishu.cn}
-    project-key: ${FEISHU_PROJECT_KEY:}
-    plugin-id: ${FEISHU_PROJECT_PLUGIN_ID:}
-    plugin-secret: ${FEISHU_PROJECT_PLUGIN_SECRET:}
-    user-key: ${FEISHU_PROJECT_USER_KEY:}
     request-timeout: 30s
   diff-wait:
     max-attempts: 3

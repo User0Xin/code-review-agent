@@ -8,7 +8,6 @@ import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.RevisionClient;
 import com.agent.codereviewagent.service.RevisionRecordService;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -198,7 +197,6 @@ class ModelSummaryWebhookTest {
             return request -> Reviewer.ReviewFindings.of(List.of(
                     new Reviewer.CommentDraft("main.go", null, null, "缺陷", null, "响应体没有关闭。")));
         }
-        @Bean @Primary WorkItemClient summaryWorkItems() { return id -> Optional.empty(); }
         @Bean @Primary SpecDocumentPicker summarySpecPicker() { return paths -> List.of(); }
         @Bean @Primary CodingStandardPicker summaryStandardsPicker() { return paths -> List.of("docs/coding.md"); }
     }

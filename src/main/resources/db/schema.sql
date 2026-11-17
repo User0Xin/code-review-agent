@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS finding (
 CREATE INDEX IF NOT EXISTS idx_finding_merge_request
     ON finding (project_id, merge_request_iid, id);
 
+-- 每个合并请求只索引当前需要清理的失败说明；各次审查的历史保存在 review_record。
 CREATE TABLE IF NOT EXISTS review_failure_note (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS coding_standard_revision (
     error TEXT
 );
 
+-- 同一项目已有待发布或已打开的修订时，不允许再准备第二份；已关闭和已合并的记录可保留。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_revision
     ON coding_standard_revision(project_id) WHERE state IN ('PREPARING', 'OPEN');
 

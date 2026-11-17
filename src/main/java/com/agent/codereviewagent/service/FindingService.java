@@ -12,6 +12,7 @@ public interface FindingService extends IService<FindingEntity> {
 
     List<FindingEntity> findByMergeRequest(long projectId, long mergeRequestIid);
 
+    /** 按项目取尚未用于修订的编码规范和缺陷类发现；即使上次判为误报，也要结合最新回复重新判断。 */
     List<FindingEntity> findUnconsumed(long projectId);
 
     void recordFalsePositive(FindingEntity finding, FalsePositiveJudge.Decision decision);

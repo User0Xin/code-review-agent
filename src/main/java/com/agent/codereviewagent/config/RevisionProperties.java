@@ -3,6 +3,7 @@ package com.agent.codereviewagent.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+/** newFindingsThreshold 决定积累多少条新发现后开始总结；minimumGroupSize 决定每组至少需要几条不同的发现才可提出修订。 */
 @Component
 @ConfigurationProperties(prefix = "review.revision")
 public class RevisionProperties {

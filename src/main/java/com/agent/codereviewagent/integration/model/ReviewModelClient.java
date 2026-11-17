@@ -52,6 +52,7 @@ public class ReviewModelClient {
             throw new IllegalStateException("审查模型返回了空内容");
         }
         try {
+            // 只接受一个与目标类型匹配的 JSON 值，出现额外字段或尾随内容即视为响应无效。
             T parsed = json.readerFor(responseType)
                     .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                     .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)

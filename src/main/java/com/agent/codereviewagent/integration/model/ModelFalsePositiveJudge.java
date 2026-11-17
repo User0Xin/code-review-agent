@@ -22,6 +22,7 @@ public class ModelFalsePositiveJudge implements FalsePositiveJudge {
         if (decision.falsePositive() == null || decision.reason() == null || decision.reason().isBlank()) {
             throw new IllegalStateException("误报模型返回的判定字段不符合约定");
         }
+        // 没有外部回复就没有开发者否定该发现的依据，此时即使模型判为误报也不采纳。
         if (externalReplies.isEmpty()) { return new Decision(false, "讨论没有外部回复，未被开发者判定为误报。"); }
         return decision;
     }

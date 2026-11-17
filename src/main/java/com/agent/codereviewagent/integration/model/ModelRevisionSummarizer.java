@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 
-/** 按完整总结指令，把发现归类并产生已有规范的局部替换。 */
+/** 将发现和规范正文交给模型生成替换建议；这里只校验字段，修订服务再核对发现编号和具体原文。 */
 @Component
 public class ModelRevisionSummarizer implements RevisionSummarizer {
 

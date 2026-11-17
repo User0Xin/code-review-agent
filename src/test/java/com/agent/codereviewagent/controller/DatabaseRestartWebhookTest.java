@@ -11,7 +11,6 @@ import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.RevisionClient;
 import com.agent.codereviewagent.service.RevisionSummarizer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
-import com.agent.codereviewagent.service.WorkItemClient;
 import com.agent.codereviewagent.utils.ReviewClock;
 import com.agent.codereviewagent.utils.Sleeper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -210,7 +209,6 @@ class DatabaseRestartWebhookTest {
             return request -> Reviewer.ReviewFindings.of(List.of(new Reviewer.CommentDraft(
                     "main.go", null, null, "缺陷", "资源管理", "新增发现 " + request.headSha())));
         }
-        @Bean @Primary WorkItemClient workItemClient() { return id -> Optional.empty(); }
         @Bean @Primary SpecDocumentPicker specDocumentPicker() { return paths -> List.of(); }
         @Bean @Primary CodingStandardPicker codingStandardPicker() { return paths -> List.of(STANDARD_PATH); }
         @Bean @Primary FalsePositiveJudge falsePositiveJudge() {

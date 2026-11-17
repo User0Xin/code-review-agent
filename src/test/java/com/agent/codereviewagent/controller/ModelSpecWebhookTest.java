@@ -5,7 +5,6 @@ import com.agent.codereviewagent.service.CodingStandardPicker;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.ReviewRecordService;
 import com.agent.codereviewagent.service.Reviewer;
-import com.agent.codereviewagent.service.WorkItemClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -156,7 +155,6 @@ class ModelSpecWebhookTest {
     static class Fakes {
         @Bean @Primary SpecGitlab modelSpecGitlab() { return new SpecGitlab(); }
         @Bean @Primary RecordingReviewer modelSpecReviewer() { return new RecordingReviewer(); }
-        @Bean @Primary WorkItemClient modelSpecWorkItems() { return id -> Optional.empty(); }
         @Bean @Primary CodingStandardPicker modelSpecStandards() { return paths -> List.of(); }
     }
 }

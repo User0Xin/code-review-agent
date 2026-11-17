@@ -10,7 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
-/** 发现的业务操作。 */
+/** 保存已写回 GitLab 的审查发现，供后续复审对照及编码规范修订使用。 */
 @Service
 public class FindingServiceImpl
         extends ServiceImpl<FindingMapper, FindingEntity>
@@ -35,6 +35,7 @@ public class FindingServiceImpl
     @Override
     @Transactional(readOnly = true)
     public List<FindingEntity> findUnconsumed(long projectId) {
+        // 规范修订从整个项目汇集尚未归入修订的发现；针对具体需求的 spec 问题不参与。
         return lambdaQuery().eq(FindingEntity::getProjectId, projectId)
                 .isNull(FindingEntity::getRevisionId)
                 .in(FindingEntity::getCategory, "编码规范", "缺陷")
@@ -44,6 +45,7 @@ public class FindingServiceImpl
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void recordFalsePositive(FindingEntity finding, FalsePositiveJudge.Decision decision) {
+        // 写入时再次检查修订编号，避免覆盖已归入修订的发现所用的判断。
         lambdaUpdate().eq(FindingEntity::getId, finding.getId()).isNull(FindingEntity::getRevisionId)
                 .set(FindingEntity::getFalsePositive, decision.falsePositive())
                 .set(FindingEntity::getFalsePositiveReason, decision.reason()).update();

@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 
-/** 每次从规范分支清单判定说明性编码规范，模型只返回候选路径。 */
+/** 从规范分支的文档路径中选择编码规范；调用方会核对候选清单，再读取入选文件的正文。 */
 @Component
 public class ModelCodingStandardPicker implements CodingStandardPicker {
 
