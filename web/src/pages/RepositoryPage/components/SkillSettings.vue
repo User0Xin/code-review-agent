@@ -77,16 +77,17 @@ function restore(slot: SkillSlot) {
         <p class="field-hint">{{ item.description }}</p>
       </div>
       <div class="skill-controls">
-        <label class="switch-label"
+        <label v-if="state(item.slot)?.custom" class="switch-label"
           ><input
             type="checkbox"
             :checked="state(item.slot)?.enabled"
-            :aria-label="'启用' + item.name"
+            :aria-label="'使用自定义' + item.name + '指令'"
             :data-testid="'skill-toggle-' + item.slot"
             :disabled="!!busy"
             @click.prevent="toggle(item.slot)"
-          />启用</label
+          />使用自定义</label
         >
+        <span v-else class="field-hint">使用内置指令</span>
         <label class="file-action button"
           ><input
             type="file"

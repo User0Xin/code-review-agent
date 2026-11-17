@@ -16,7 +16,7 @@ public interface RepositoryClient {
 
     record Change(DiffRefs refs, String description) {}
     default Change change(long id, long number) {
-        return new Change(diffRefs(id, number).orElseThrow(() -> new IllegalStateException("尚无可审查的 diff 版本")), "");
+        return new Change(diffRefs(id, number).orElseThrow(DiffNotReadyException::new), "");
     }
 
     default String readDiff(long projectId, long mergeRequestIid, String headSha) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import RepoSelect from '@/components/RepoSelect.vue'
 import WorkIcon from '@/components/WorkIcon.vue'
 import RepoForm from './components/RepoForm.vue'
@@ -8,6 +8,7 @@ import type { Repository } from '@/business/repository'
 import { useRepositories } from '@/stores/repositories'
 const repositories = useRepositories()
 const adding = ref(false)
+const dialog = ref<HTMLDialogElement>()
 const notice = ref('')
 watch(
   () => repositories.selectedId,
@@ -23,9 +24,11 @@ function saved(repo: Repository) {
   adding.value = false
   notice.value = '仓库配置已保存。'
 }
-function startNew() {
+async function startNew() {
   adding.value = true
   notice.value = ''
+  await nextTick()
+  dialog.value?.showModal()
 }
 </script>
 <template>
@@ -37,7 +40,7 @@ function startNew() {
         <p>为每个仓库独立管理评审规范、需求文档和 Skill。</p>
       </div>
       <button
-        v-if="!adding && repositories.items.length"
+        v-if="repositories.items.length"
         class="button primary"
         data-testid="repo-new"
         @click="startNew"
@@ -45,22 +48,31 @@ function startNew() {
         <WorkIcon name="plus" />添加仓库
       </button>
     </header>
-    <RepoSelect v-if="!adding" />
+    <RepoSelect />
     <p v-if="notice" role="status" class="notice">{{ notice }}</p>
     <div class="sections">
       <RepoForm
-        :key="adding ? 'new' : (repositories.selectedId ?? 'new')"
-        :repository="adding ? undefined : repositories.current"
-        :can-cancel="adding && !!repositories.items.length"
+        v-if="!adding"
+        :key="repositories.selectedId ?? 'new'"
+        :repository="repositories.current"
+        :can-cancel="false"
         @saved="saved"
-        @cancel="adding = false"
       />
       <SkillSettings
-        v-if="!adding && repositories.current"
+        v-if="repositories.current"
         :key="repositories.current.id"
         :repository="repositories.current"
         @changed="repositories.upsert"
       />
     </div>
+    <dialog
+      v-if="adding"
+      ref="dialog"
+      class="repository-dialog"
+      aria-label="添加被审查仓库"
+      @cancel="adding = false"
+    >
+      <RepoForm can-cancel @saved="saved" @cancel="adding = false" />
+    </dialog>
   </div>
 </template>

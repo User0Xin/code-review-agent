@@ -94,7 +94,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
             return;
         }
         MergeRequestWebhookRequest.ObjectAttributes attributes = request.objectAttributes();
-        if (attributes == null || !startsReview(attributes)) {
+        if (attributes == null || !attributes.startsReview()) {
             return;
         }
         MergeRequestWebhookRequest.Project project = request.project();
@@ -198,14 +198,15 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         List<Long> resolved = findings.resolvedDiscussionIds() == null ? List.of() : findings.resolvedDiscussionIds();
         List<Long> declined = findings.declinedDiscussionIds() == null ? List.of() : findings.declinedDiscussionIds();
         context.phase = "评论写回失败";
-        int failed = postDrafts(context, diffRefs,
-                stillOpen(findings.drafts(), priorFindings, resolved, declined));
+        var drafts = stillOpen(findings.drafts(), priorFindings, resolved, declined).stream().distinct().toList();
+        int failed = postDrafts(context, diffRefs, drafts);
         context.phase = "讨论状态更新失败";
         resolveKnownDiscussions(context, diffRefs, priorFindings, resolved, declined);
         if (failed > 0) {
             return fail(context, "有 " + failed + " 条没能写回", null);
         }
         ReviewRecordEntity record = reviewRecord(context, null, clock.now());
+        record.setPublishedCount(drafts.size());
         // 清理通知失败不抹掉本次成功审查，旧索引保留到下一次重试。
         var old = reviewRecordService.findFailureNoteId(context.storageId, mergeRequestIid);
         if (old.isPresent()) {
@@ -221,10 +222,10 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         return record;
     }
 
-    /** 本轮完全相同的草稿只发布一次；单条发布失败计数后，继续处理其余草稿。 */
+    /** 调用方已去掉完全相同的草稿；单条发布失败计数后，继续处理其余草稿。 */
     private int postDrafts(ReviewContext context, RepositoryClient.DiffRefs refs, List<Reviewer.CommentDraft> drafts) {
         int failed = 0;
-        for (Reviewer.CommentDraft draft : drafts.stream().distinct().toList()) {
+        for (Reviewer.CommentDraft draft : drafts) {
             long discussionId;
             try {
                 discussionId = postOne(context, refs, draft);
@@ -519,19 +520,4 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         return true;
     }
 
-    /**
-     * 打开合并请求，或更新里带了 oldrev（源分支有新提交）时才审查。
-     * 改标题、指派人这类不带新代码的更新不审查。
-     */
-    private static boolean startsReview(MergeRequestWebhookRequest.ObjectAttributes attributes) {
-        String action = attributes.action();
-        if ("open".equals(action)) {
-            return true;
-        }
-        if (!"update".equals(action)) {
-            return false;
-        }
-        String oldrev = attributes.oldrev();
-        return oldrev != null && !oldrev.isBlank();
-    }
 }

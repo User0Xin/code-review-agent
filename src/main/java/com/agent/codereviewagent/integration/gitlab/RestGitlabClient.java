@@ -1,6 +1,7 @@
 package com.agent.codereviewagent.integration.gitlab;
 
 import com.agent.codereviewagent.config.GitlabProperties;
+import com.agent.codereviewagent.service.DiffNotReadyException;
 import com.agent.codereviewagent.service.DiffVersionChangedException;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -56,7 +57,7 @@ public class RestGitlabClient implements GitlabClient {
     @Override
     public Change change(long id, long number) {
         JsonNode mr = get(mergeRequest(id,number));
-        return new Change(refs(mr).orElseThrow(() -> new IllegalStateException("MR 的 diff 未就绪")),mr.path("description").asText(""));
+        return new Change(refs(mr).orElseThrow(DiffNotReadyException::new), mr.path("description").asText(""));
     }
 
     @Override

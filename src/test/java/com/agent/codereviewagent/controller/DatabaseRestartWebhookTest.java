@@ -128,7 +128,8 @@ class DatabaseRestartWebhookTest {
                  "last_commit":{"id":"%s"}}}
                 """.formatted(action, head);
         var request = context.getBean(ObjectMapper.class).readValue(payload, MergeRequestWebhookRequest.class);
-        var result = context.getBean(ReviewWebhookController.class).receive("Merge Request Hook", request);
+        var result = context.getBean(ReviewWebhookController.class).receive("Merge Request Hook", null, request,
+                new org.springframework.mock.web.MockHttpServletResponse());
         assertThat(result.getCode()).isEqualTo(ResultCode.SUCCESS);
     }
 
