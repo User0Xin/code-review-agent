@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { isActive, type ReviewJob } from './jobs'
+import { isActive, statusLabels, type ReviewJob } from './jobs'
 import { listJobs, startJob } from '@/requests/jobs'
 import { messageOf } from '@/utils/request'
 
@@ -55,7 +55,11 @@ export function useReviewJobs(repositoryId: number) {
         (a, b) => b.id - a.id,
       )
       loaded.value = true
-      notice.value = '评审任务 #' + result.id + ' 已提交。'
+      // 服务端会复用活动任务和刚结束的任务，返回成功不代表创建了新任务。
+      notice.value = `评审任务 #${result.id} ${statusLabels[result.status]}。`
+      if (!isActive(result.status)) {
+        notice.value += '本次未创建新任务，请在该任务结束 3 秒后重试。'
+      }
       schedule()
       void refresh()
     } catch (e) {

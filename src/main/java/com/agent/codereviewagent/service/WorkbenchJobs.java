@@ -3,6 +3,8 @@ package com.agent.codereviewagent.service;
 import com.agent.codereviewagent.mapper.WorkbenchJobMapper;
 import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
 import com.agent.codereviewagent.models.entity.WorkbenchJob;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
@@ -19,6 +21,7 @@ import java.util.List;
 @Service
 @DependsOnDatabaseInitialization
 public class WorkbenchJobs implements InitializingBean {
+    private static final Logger log = LoggerFactory.getLogger(WorkbenchJobs.class);
     private final WorkbenchJobMapper jobs;
     private final RepositoryProfiles repositories;
     private final RepositoryAccess access;
@@ -61,6 +64,9 @@ public class WorkbenchJobs implements InitializingBean {
         try {
             // 客户端绑定已登记仓库，在该仓库下解析编号；不接受浏览器传入的 API 地址或提交。
             change = access.client(profile).change(profile.remoteId(), number);
+        } catch (DiffNotReadyException notReady) {
+            // 平台确认编号存在，只是还没生成可审查的 diff；与读取失败分开报告。
+            throw new ResponseStatusException(HttpStatus.CONFLICT, notReady.getMessage());
         } catch (RuntimeException failure) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "无法读取此仓库的 PR/MR，请核对编号和服务端访问权限");
         }
@@ -109,6 +115,9 @@ public class WorkbenchJobs implements InitializingBean {
                     : result.getReason();
             jobs.finish(job.id(), success ? "SUCCEEDED" : "FAILED", message, Instant.now().toString());
         } catch (RuntimeException failure) {
+            // 用户只看到固定说明；定位信息留在服务端，不输出请求、凭据或模型输入。
+            log.error("工作台审查任务中断：jobId={}, repositoryId={}, number={}, error={}",
+                    job.id(), job.repositoryId(), job.number(), failure.getClass().getSimpleName());
             jobs.finish(job.id(), "FAILED", "审查执行中断，请核对仓库配置和服务端日志", Instant.now().toString());
         }
     }

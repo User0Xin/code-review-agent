@@ -1,6 +1,7 @@
 package com.agent.codereviewagent.integration.github;
 
 import com.agent.codereviewagent.config.GithubProperties;
+import com.agent.codereviewagent.service.DiffNotReadyException;
 import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.DiffVersionChangedException;
 import com.agent.codereviewagent.service.RepositoryClient;
@@ -48,7 +49,7 @@ public class GithubClient implements RepositoryClient {
     @Override
     public Change change(long id, long number) {
         JsonNode pr = api.get(pull(id, number));
-        return new Change(refs(pr).orElseThrow(() -> new IllegalStateException("PR 的 diff 未就绪")),pr.path("body").asText(""));
+        return new Change(refs(pr).orElseThrow(DiffNotReadyException::new), pr.path("body").asText(""));
     }
 
     private String repository(long id) { return "/repos/" + GithubApi.path(api.repository(id)); }

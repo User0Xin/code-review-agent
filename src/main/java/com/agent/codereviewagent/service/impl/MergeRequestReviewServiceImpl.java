@@ -222,7 +222,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         return record;
     }
 
-    /** 本轮完全相同的草稿只发布一次；单条发布失败计数后，继续处理其余草稿。 */
+    /** 调用方已去掉完全相同的草稿；单条发布失败计数后，继续处理其余草稿。 */
     private int postDrafts(ReviewContext context, RepositoryClient.DiffRefs refs, List<Reviewer.CommentDraft> drafts) {
         int failed = 0;
         for (Reviewer.CommentDraft draft : drafts) {

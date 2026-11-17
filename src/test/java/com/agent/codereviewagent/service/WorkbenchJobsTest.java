@@ -93,4 +93,15 @@ class WorkbenchJobsTest {
         assertThatThrownBy(() -> jobs.manual(11, 4)).isInstanceOf(ResponseStatusException.class);
         assertThat(jobs.list(11).getFirst().message()).contains("队列已满");
     }
+
+    @Test
+    void aDiffThatIsNotReadyIsAConflictRatherThanAnUnreadableRequest() {
+        prepare(5, new RepositoryClient.DiffRefs("head", "base", null));
+        var jobs = new WorkbenchJobs(mapper, profiles, access, review, pending::addLast);
+        when(repo.change(77, 5)).thenThrow(new DiffNotReadyException());
+        assertThatThrownBy(() -> jobs.manual(11, 5))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        error -> assertThat(error.getStatusCode().value()).isEqualTo(409));
+        assertThat(jobs.list(11)).noneMatch(job -> job.number() == 5);
+    }
 }
