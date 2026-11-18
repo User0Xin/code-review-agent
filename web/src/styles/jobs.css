@@ -1,0 +1,107 @@
+.trigger-fields {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 5px;
+}
+.trigger-fields input {
+  max-width: 250px;
+}
+.history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 20px;
+}
+.history-heading .eyebrow {
+  margin-bottom: 5px;
+}
+.job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.job-list li {
+  display: flex;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+  padding: 16px 0;
+}
+.job-list li:last-child {
+  padding-bottom: 0;
+}
+.job-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  background: var(--wash);
+  border-radius: 7px;
+}
+.job-body {
+  min-width: 0;
+}
+.job-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 5px;
+}
+.job-meta code {
+  font-size: 11px;
+}
+.job-message {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.status-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+  border-radius: 50%;
+}
+.status-badge[data-status='RUNNING'] {
+  background: #edf1f7;
+  border-color: #cad5e3;
+  color: #345980;
+}
+.status-badge[data-status='SUCCEEDED'] {
+  background: #edf4ee;
+  border-color: #cbdfcf;
+  color: #386943;
+}
+.status-badge[data-status='FAILED'],
+.status-badge[data-status='UNCERTAIN'] {
+  background: #fbf0ec;
+  border-color: #ead0c8;
+  color: #913c2a;
+}
+.empty-action {
+  margin-top: 12px;
+}
+@media (max-width: 420px) {
+  .trigger-fields {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .trigger-fields input {
+    max-width: none;
+  }
+  .job-icon {
+    display: none;
+  }
+}

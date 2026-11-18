@@ -130,4 +130,62 @@
         </plugins>
     </build>
 
+    <profiles>
+        <!-- 后端单独测试不依赖 Node；生产交付始终从锁文件重新构建前端。 -->
+        <profile>
+            <id>production</id>
+            <properties>
+                <npm.executable>npm</npm.executable>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <configuration>
+                            <executable>${npm.executable}</executable>
+                            <workingDirectory>${project.basedir}/web</workingDirectory>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>web-install</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration><arguments><argument>ci</argument></arguments></configuration>
+                            </execution>
+                            <execution>
+                                <id>web-build</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration><arguments><argument>run</argument><argument>build</argument></arguments></configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>web-resources</id>
+                                <phase>process-resources</phase>
+                                <goals><goal>copy-resources</goal></goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
+                                    <resources>
+                                        <resource><directory>web/dist</directory><filtering>false</filtering></resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>windows-npm</id>
+            <activation><os><family>Windows</family></os></activation>
+            <properties><npm.executable>npm.cmd</npm.executable></properties>
+        </profile>
+    </profiles>
 </project>

@@ -1,0 +1,64 @@
+:root {
+  --ink: #202421;
+  --muted: #5e655f;
+  --line: #dce0da;
+  --wash: #f7f8f6;
+  --mono: ui-monospace, Consolas, monospace;
+  color: var(--ink);
+  background: #fff;
+  font:
+    14px/1.5 'Segoe UI',
+    'Microsoft YaHei',
+    'PingFang SC',
+    sans-serif;
+  font-synthesis: none;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.35;
+}
+h1 {
+  font-size: clamp(27px, 3vw, 36px);
+  letter-spacing: -0.045em;
+}
+h2 {
+  font-size: 17px;
+}
+h3 {
+  font-size: 14px;
+}
+button,
+input,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 2px solid #42694c;
+  outline-offset: 3px;
+}
+main:focus:not(:focus-visible) {
+  outline: none;
+}
+a {
+  color: inherit;
+}
+code {
+  font-family: var(--mono);
+}

@@ -22,6 +22,10 @@ public record MergeRequestWebhookRequest(
             String oldrev,
             String description,
             @JsonProperty("last_commit") Commit lastCommit) {
+        /** 修改标题或指派人也会产生 update；只有附带旧提交的更新才需要评审。 */
+        public boolean startsReview() {
+            return "open".equals(action) || ("update".equals(action) && oldrev != null && !oldrev.isBlank());
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

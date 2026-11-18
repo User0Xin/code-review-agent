@@ -4,6 +4,8 @@
 
 本文描述已实现的配置与恢复机制。本地测试中的 GitLab 和模型由替身提供；测试通过不代表已经配置真实凭据、登记线上 webhook、部署服务或执行过真实审查。
 
+浏览器管理入口、按仓库配置文档位置和导入指令，见[代码评审工作台](workbench.md)。下方单仓库配置仍可用于原有 webhook 接入。
+
 ## 部署配置
 
 配置定义见 [application.yaml](../src/main/resources/application.yaml)。需要 JDK 21、Maven、可读写的持久化目录，以及能访问 GitLab 和模型服务的网络。
@@ -91,7 +93,7 @@ Content-Type: application/json
 
 服务按 webhook 的 `last_commit.id` 核对 diff，并用 `head_sha`、`base_sha`、`start_sha` 三个提交标识固定本次 diff version；模型审查后再次核对完整版本，即使源分支提交未变、目标分支改变导致 diff 改变，也会停止写回。过大的或被截断的 diff 按失败处理。可挂行的发现写成行讨论；GitLab 明确拒绝行位置时回退为单独概览讨论。其他写回失败保留已经成功写回的发现，并说明未写上的数量。
 
-当前 webhook 同步处理，入口超时应覆盖文件读取和模型调用耗时。HTTP 200 表示事件已处理，不表示审查一定成功；结果以审查记录和合并请求讨论为准。当前应用端点未校验 `X-Gitlab-Token`，部署入口应通过内网或反向代理访问控制限制调用方。
+未登记到工作台的原有 GitLab 仓库同步处理，入口超时应覆盖文件读取和模型调用耗时。HTTP 200 表示事件已处理，不表示审查一定成功。设置 `REVIEW_GITLAB_WEBHOOK_SECRET` 后端点会校验 `X-Gitlab-Token`；未设置时仅原有模式保留原行为，部署入口应通过内网或反向代理限制访问。已登记仓库必须配置该密钥才能通过 webhook 排队；HTTP 202 表示受理，结果可在工作台及合并请求中查看。
 
 ## 三份随包发布的指令
 
