@@ -40,6 +40,7 @@ public class ReviewRecordEntity {
     private String noteError;
     private String failureDetail;
     /** 本轮实际成功写回的新评论数，供工作台生成持久化结果摘要；不从历史相似发现估算。 */
-    @TableField(exist = false)
-    private int publishedCount;
+    private Integer publishedCount;
+    private Long workbenchJobId;
+    private String failureStage;
 }

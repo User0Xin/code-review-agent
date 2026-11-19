@@ -44,7 +44,7 @@ class WorkbenchJobsTest {
         assertThat(jobs.webhook(profile, 1, "head").id()).isEqualTo(accepted.id());
         assertThat(jobs.manual(11, 1).id()).isEqualTo(accepted.id());
         assertThat(pending).hasSize(1);
-        when(review.runConfigured(11, 1, "manual", "说明", refs)).thenAnswer(invocation -> {
+        when(review.runConfigured(11, 1, "manual", "说明", refs, accepted.id())).thenAnswer(invocation -> {
             assertThat(jobs.list(11).getFirst().status()).isEqualTo("RUNNING");
             var actual = new ReviewRecordEntity();
             actual.setOutcome("SUCCESS");
@@ -56,7 +56,7 @@ class WorkbenchJobsTest {
         var next = new RepositoryClient.DiffRefs("head", "base-v2", null);
         when(repo.change(77, 1)).thenReturn(new RepositoryClient.Change(next, "新版本"));
         assertThat(jobs.webhook(profile, 1, "head").id()).isNotEqualTo(accepted.id());
-        verify(review, times(1)).runConfigured(11, 1, "manual", "说明", refs);
+        verify(review, times(1)).runConfigured(11, 1, "manual", "说明", refs, accepted.id());
     }
 
     @Test
@@ -70,7 +70,7 @@ class WorkbenchJobsTest {
         pending.remove().run();
         verifyNoInteractions(review);
         when(repo.change(77, 3)).thenReturn(new RepositoryClient.Change(refs, "说明"));
-        when(review.runConfigured(11, 3, "manual", "说明", refs)).thenAnswer(call -> {
+        when(review.runConfigured(eq(11L), eq(3L), eq("manual"), eq("说明"), eq(refs), anyLong())).thenAnswer(call -> {
             var actual = new ReviewRecordEntity();
             actual.setOutcome("FAILED");
             actual.setReason("spec 读取失败");
@@ -123,12 +123,12 @@ class WorkbenchJobsTest {
         assertThat(pending).hasSize(1);
         var success = new ReviewRecordEntity();
         success.setOutcome("SUCCESS");
-        when(review.runConfigured(11, 6, "webhook", "新说明", refs)).thenReturn(success);
+        when(review.runConfigured(11, 6, "webhook", "新说明", refs, first.id())).thenReturn(success);
         pending.remove().run();
         assertThat(jobs.webhook(profile, 6, "wanted").id()).isEqualTo(first.id());
         assertThat(jobs.list(11).stream().filter(job -> job.number() == 6)).singleElement()
                 .satisfies(job -> assertThat(job.status()).isEqualTo("SUCCEEDED"));
-        verify(review).runConfigured(11, 6, "webhook", "新说明", refs);
+        verify(review).runConfigured(11, 6, "webhook", "新说明", refs, first.id());
     }
 
     @Test
@@ -142,16 +142,81 @@ class WorkbenchJobsTest {
     }
 
     @Test
-    void pendingWebhookCoalescesWithManualJobRegisteredBeforeVersionArrives() {
+    void manualReusesPendingWebhookBeforeVersionArrives() {
         var refs = new RepositoryClient.DiffRefs("head", "base", "start");
         var jobs = prepare(8, refs);
         when(repo.change(77, 8)).thenThrow(new DiffNotReadyException())
                 .thenReturn(new RepositoryClient.Change(refs, "说明"));
-        jobs.webhook(profile, 8, "head");
+        var webhook = jobs.webhook(profile, 8, "head");
         var manual = jobs.manual(11, 8);
+        assertThat(manual.id()).isEqualTo(webhook.id());
+        var success = new ReviewRecordEntity();
+        success.setOutcome("SUCCESS");
+        when(review.runConfigured(11, 8, "webhook", "说明", refs, webhook.id())).thenReturn(success);
         pending.remove().run();
-        assertThat(jobs.list(11).stream().filter(job -> job.number() == 8)).containsExactly(manual);
-        verifyNoInteractions(review);
+        assertThat(jobs.list(11).stream().filter(job -> job.number() == 8)).singleElement()
+                .satisfies(job -> assertThat(job.status()).isEqualTo("SUCCEEDED"));
+        verify(review, times(1)).runConfigured(11, 8, "webhook", "说明", refs, webhook.id());
+    }
+
+    @Test
+    void manualRechecksAnActiveWebhookThatArrivesDuringPlatformRead() throws Exception {
+        var refs = new RepositoryClient.DiffRefs("head", "base", "start");
+        var jobs = prepare(10, refs);
+        var reading = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(repo.change(77, 10)).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() == 1) {
+                reading.countDown();
+                assertThat(release.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                return new RepositoryClient.Change(new RepositoryClient.DiffRefs("old-head", "old-base", null), "old");
+            }
+            return new RepositoryClient.Change(refs, "new");
+        });
+        var manual = java.util.concurrent.CompletableFuture.supplyAsync(() -> jobs.manual(11, 10));
+        try {
+            assertThat(reading.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            var webhook = jobs.webhook(profile, 10, "head");
+            release.countDown();
+            assertThat(manual.get(5, java.util.concurrent.TimeUnit.SECONDS).id()).isEqualTo(webhook.id());
+            assertThat(pending).hasSize(1);
+            assertThat(jobs.manual(11, 10).id()).isEqualTo(webhook.id());
+            verify(repo, times(2)).change(77, 10);
+        } finally { release.countDown(); }
+    }
+
+    @Test
+    void failedRetryUsesCooldownThenLatestVersionAndKeepsTheOriginal() {
+        var refs = new RepositoryClient.DiffRefs("old-head", "base", null);
+        var jobs = prepare(11, refs);
+        var original = jobs.manual(11, 11);
+        mapper.finish(original.id(), "FAILED", "模型审查失败", java.time.Instant.now().toString());
+        assertThat(jobs.manual(11, 11).id()).isEqualTo(original.id());
+        var next = new RepositoryClient.DiffRefs("new-head", "new-base", null);
+        when(repo.change(77, 11)).thenReturn(new RepositoryClient.Change(next, "latest"));
+        var retry = jobs.manual(11, 11);
+        assertThat(retry.id()).isNotEqualTo(original.id());
+        assertThat(retry.headSha()).isEqualTo("new-head");
+        assertThat(mapper.get(11, original.id()).status()).isEqualTo("FAILED");
+        assertThat(jobs.manual(11, 11).id()).isEqualTo(retry.id());
+    }
+
+    @Test
+    void activeOldVersionBlocksManualButDoesNotDiscardNewVersionWebhook() {
+        var oldRefs = new RepositoryClient.DiffRefs("old-head", "old-base", "old-start");
+        var jobs = prepare(12, oldRefs);
+        var old = jobs.manual(11, 12);
+        var latestRefs = new RepositoryClient.DiffRefs("new-head", "new-base", "new-start");
+        when(repo.change(77, 12)).thenReturn(new RepositoryClient.Change(latestRefs, "latest"));
+        assertThat(jobs.manual(11, 12).id()).isEqualTo(old.id());
+        verify(repo, times(1)).change(77, 12);
+        var webhook = jobs.webhook(profile, 12, "new-head");
+        assertThat(webhook.id()).isNotEqualTo(old.id());
+        assertThat(webhook.headSha()).isEqualTo("new-head");
+        assertThat(jobs.manual(11, 12).id()).isEqualTo(webhook.id());
+        verify(repo, times(2)).change(77, 12);
+        assertThat(pending).hasSize(2);
     }
 
     @Test

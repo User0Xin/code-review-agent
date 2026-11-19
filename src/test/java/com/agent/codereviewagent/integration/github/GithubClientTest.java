@@ -143,12 +143,14 @@ class GithubClientTest {
         get(PR, current.toString());
         expect("POST", REPO + "/issues/4/comments", 201, "{\"id\":42}");
         boolean right = "RIGHT".equals(side);
-        assertThat(github.createLineDiscussion(7, 4, path, right ? 19 : null, right ? null : 7, REFS, body))
-                .isEqualTo(85);
+        var published = github.publishLine(7, 4, path, right ? 19 : null, right ? null : 7, REFS, body);
+        assertThat(published.id()).isEqualTo(85);
         JsonNode line = json.readTree(bodies.remove());
         assertThat(line.path("body").asText()).isEqualTo(body);
         assertThat(line.path("side").asText()).isEqualTo(side);
-        assertThat(json.readTree(bodies.remove()).path("body").asText()).startsWith(body + "\n\n")
+        String actualBody = json.readTree(bodies.remove()).path("body").asText();
+        assertThat(published.body()).isEqualTo(actualBody);
+        assertThat(actualBody).startsWith(body + "\n\n")
                 .contains("<code>src/a &amp; &lt;b&gt;.java</code>", side + " 第 " + (right ? 19 : 7) + " 行",
                         "](" + repositoryUrl + "/compare/base...head)");
     }
@@ -159,6 +161,22 @@ class GithubClientTest {
         expect("POST", PR + "/comments", 403, "{\"message\":\"secret error details\"}");
         assertThatThrownBy(() -> github.createLineDiscussion(7, 4, "a.txt", 2, null, REFS, "text"))
                 .hasMessageContaining("403").hasMessageNotContaining("secret");
+    }
+
+    @Test
+    void versionReadFailuresBeforeLineOrFallbackAreNotUncertainPublications() {
+        expect("GET", PR, 500, "{}");
+        assertThatThrownBy(() -> github.publishLine(7, 4, "a.txt", 2, null, REFS, "text"))
+                .isInstanceOf(com.agent.codereviewagent.service.VersionCheckFailedException.class);
+        assertThat(bodies).isEmpty();
+
+        get(PR, pr("base", 1));
+        expect("POST", PR + "/comments", 422, "{\"message\":\"Line must be part of the diff\"}");
+        expect("GET", PR, 500, "{}");
+        assertThatThrownBy(() -> github.publishLine(7, 4, "a.txt", 2, null, REFS, "text"))
+                .isInstanceOf(com.agent.codereviewagent.service.VersionCheckFailedException.class);
+        // 唯一 POST 是已明确拒绝的行评论；回退概览未发送。
+        assertThat(bodies).hasSize(1);
     }
 
     @Test

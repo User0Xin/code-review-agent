@@ -2,6 +2,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { isActive, statusLabels, type ReviewJob } from './jobs'
 import { listJobs, startJob } from '@/requests/jobs'
 import { messageOf } from '@/utils/request'
+import { workbenchToken } from '@/utils/session'
 
 // 每个选中的仓库有自己的轮询；切换仓库时旧请求不能改写新视图。
 export function useReviewJobs(repositoryId: number) {
@@ -15,6 +16,7 @@ export function useReviewJobs(repositoryId: number) {
   const activeCount = computed(() => rows.value.filter((job) => isActive(job.status)).length)
   let alive = true
   let revision = 0
+  let submission = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   function schedule() {
     clearTimeout(timer)
@@ -27,7 +29,7 @@ export function useReviewJobs(repositoryId: number) {
     const snapshot = revision
     loading.value = true
     try {
-      const result = await listJobs(repositoryId)
+      const result = await listJobs(repositoryId, () => alive && snapshot === revision)
       if (alive && snapshot === revision) {
         rows.value = [...result].sort((a, b) => b.id - a.id)
         loaded.value = true
@@ -42,14 +44,25 @@ export function useReviewJobs(repositoryId: number) {
       }
     }
   }
+  function invalidateSubmission() {
+    submission++
+    sending.value = false
+    submitError.value = ''
+    notice.value = ''
+  }
   async function submit(number: number) {
-    if (sending.value) return
+    if (sending.value || !alive) return
+    const snapshot = ++submission
+    const token = workbenchToken.value
+    const current = () => alive && snapshot === submission && workbenchToken.value === token
     sending.value = true
     submitError.value = ''
     notice.value = ''
     try {
-      const result = await startJob(repositoryId, number)
-      if (!alive) return
+      const result = await startJob(repositoryId, number, current)
+      if (!current()) return
+      if (result.repositoryId !== repositoryId || result.number !== number)
+        throw new Error('返回的任务与所选仓库或编号不一致，请刷新列表后重试。')
       revision++
       rows.value = [result, ...rows.value.filter((item) => item.id !== result.id)].sort(
         (a, b) => b.id - a.id,
@@ -58,14 +71,17 @@ export function useReviewJobs(repositoryId: number) {
       // 服务端会复用活动任务和刚结束的任务，返回成功不代表创建了新任务。
       notice.value = `评审任务 #${result.id} ${statusLabels[result.status]}。`
       if (!isActive(result.status)) {
-        notice.value += '本次未创建新任务，请在该任务结束 3 秒后重试。'
+        notice.value += '本次未创建新任务，请在该任务结束三秒后再试。'
+      } else {
+        notice.value += '已受理或复用已有任务，结果以该任务为准。'
       }
       schedule()
       void refresh()
+      return result
     } catch (e) {
-      if (alive) submitError.value = messageOf(e)
+      if (current()) submitError.value = messageOf(e)
     } finally {
-      if (alive) sending.value = false
+      if (current()) sending.value = false
     }
   }
   function visibility() {
@@ -92,5 +108,6 @@ export function useReviewJobs(repositoryId: number) {
     activeCount,
     refresh,
     submit,
+    invalidateSubmission,
   }
 }

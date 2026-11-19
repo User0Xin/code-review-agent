@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatTime, statusLabels, type ReviewJob } from '@/business/jobs'
+import { formatTime, reviewUrl, statusLabels, type ReviewJob } from '@/business/jobs'
 import BlankState from '@/components/BlankState.vue'
 import WorkIcon from '@/components/WorkIcon.vue'
 defineProps<{
@@ -9,8 +9,9 @@ defineProps<{
   error: string
   platform: 'github' | 'gitlab'
   repositoryUrl: string
+  selectedJobId?: number
 }>()
-defineEmits<{ refresh: [] }>()
+defineEmits<{ refresh: []; select: [jobId: number] }>()
 </script>
 <template>
   <section class="panel" data-testid="review-jobs" aria-labelledby="history-title">
@@ -31,17 +32,13 @@ defineEmits<{ refresh: [] }>()
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
     <p v-if="loading && !loaded" role="status" class="field-hint">正在读取任务…</p>
     <ol v-if="jobs.length" class="job-list">
-      <li v-for="job in jobs" :key="job.id">
+      <li v-for="job in jobs" :key="job.id" :data-testid="'review-job-' + job.id">
         <div class="job-icon"><WorkIcon name="branch" /></div>
         <div class="job-body">
           <div class="row-heading">
             <h3>
               <a
-                :href="
-                  repositoryUrl +
-                  (platform === 'gitlab' ? '/-/merge_requests/' : '/pull/') +
-                  job.number
-                "
+                :href="reviewUrl({ platform, url: repositoryUrl }, job.number)"
                 target="_blank"
                 rel="noopener noreferrer"
                 :title="'查看平台上的评审评论'"
@@ -69,6 +66,17 @@ defineEmits<{ refresh: [] }>()
               }}</time></span
             >
           </div>
+          <button
+            type="button"
+            class="button job-details-button"
+            :data-testid="'review-details-' + job.id"
+            :aria-expanded="selectedJobId === job.id"
+            :aria-controls="selectedJobId === job.id ? 'detail-title' : undefined"
+            :aria-label="'查看任务 #' + job.id + ' 详情'"
+            @click="$emit('select', job.id)"
+          >
+            查看详情
+          </button>
           <p
             v-if="job.message"
             class="job-message"

@@ -35,6 +35,16 @@ public class ReviewDatabaseMigration implements InitializingBean {
         addColumn("finding", "false_positive_reason", "TEXT");
         addColumn("coding_standard_revision", "base_ref", "TEXT");
         addColumn("revision_checkpoint", "retry_finding_ids", "TEXT");
+        addColumn("workbench_job", "details_version", "INTEGER");
+        addColumn("workbench_job", "failure_stage", "TEXT");
+        addColumn("review_record", "workbench_job_id", "INTEGER");
+        addColumn("review_record", "published_count", "INTEGER");
+        addColumn("review_record", "failure_stage", "TEXT");
+        addColumn("finding", "workbench_job_id", "INTEGER");
+        addColumn("finding", "published_body", "TEXT");
+        // 必须在补列后建索引；旧行保持 NULL，不按版本猜测历史归属。
+        jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_review_record_job ON review_record(workbench_job_id) WHERE workbench_job_id IS NOT NULL");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_finding_job ON finding(workbench_job_id, id)");
     }
 
     private void addColumn(String table, String name, String type) {

@@ -24,6 +24,7 @@ import java.util.function.Consumer;
 /** 手动和 webhook 共享任务身份。只在登记时短暂串行，平台请求和模型调用不持有登记锁。 */
 @Service
 @DependsOnDatabaseInitialization
+@org.springframework.context.annotation.DependsOn("reviewDatabaseMigration")
 public class WorkbenchJobs implements InitializingBean {
     private static final Logger log = LoggerFactory.getLogger(WorkbenchJobs.class);
     // 临时版本只用于尚在等待平台 diff 的事件，不能与任何真实提交 SHA 相同。
@@ -60,7 +61,9 @@ public class WorkbenchJobs implements InitializingBean {
     }
 
     public WorkbenchJob manual(long repositoryId, long number) {
-        return start(repositories.get(repositoryId), number, "manual", null);
+        var profile = repositories.get(repositoryId);
+        var active = jobs.active(repositoryId, number);
+        return active == null ? start(profile, number, "manual", null) : active;
     }
 
     public WorkbenchJob webhook(RepositoryProfile profile, long number, String expectedHead) {
@@ -114,9 +117,9 @@ public class WorkbenchJobs implements InitializingBean {
                     return;
                 }
             }
-            jobs.finish(job.id(), "FAILED", "等待事件指定版本的 diff 超时，请核对提交后重新发起评审", Instant.now().toString());
+            jobs.finish(job.id(), "FAILED", "等待事件指定版本的 diff 超时，请核对提交后重新发起评审", Instant.now().toString(), "DIFF");
         } catch (RuntimeException failure) {
-            jobs.finish(job.id(), "FAILED", "无法读取事件指定版本的 diff，请核对平台连接后重试", Instant.now().toString());
+            jobs.finish(job.id(), "FAILED", "无法读取事件指定版本的 diff，请核对平台连接后重试", Instant.now().toString(), "DIFF");
         }
     }
 
@@ -140,6 +143,10 @@ public class WorkbenchJobs implements InitializingBean {
 
     private synchronized WorkbenchJob enqueue(long repo, long number, String source, RepositoryClient.DiffRefs refs,
                                              Consumer<WorkbenchJob> task) {
+        if ("manual".equals(source)) {
+            var active = jobs.active(repo, number);
+            if (active != null) { return active; }
+        }
         String base = Objects.toString(refs.baseSha(), "");
         String start = Objects.toString(refs.startSha(), "");
         WorkbenchJob previous = reusable(repo, number, refs.headSha(), base, start, source);
@@ -149,7 +156,7 @@ public class WorkbenchJobs implements InitializingBean {
         try {
             worker.execute(() -> task.accept(job));
         } catch (TaskRejectedException full) {
-            jobs.finish(job.id(), "FAILED", "审查队列已满，请稍后重试", Instant.now().toString());
+            jobs.finish(job.id(), "FAILED", "审查队列已满，请稍后重试", Instant.now().toString(), "QUEUE");
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "审查队列已满，请稍后重试");
         }
         return job;
@@ -159,18 +166,18 @@ public class WorkbenchJobs implements InitializingBean {
         if (jobs.claim(job.id()) != 1) { return; }
         try {
             ReviewRecordEntity result = review.runConfigured(job.repositoryId(), job.number(), job.source(),
-                    change.description(), change.refs());
+                    change.description(), change.refs(), job.id());
             boolean success = "SUCCESS".equals(result.getOutcome());
             String message = success
                     ? "审查完成，新增 " + result.getPublishedCount() + " 条评论"
                         + (Boolean.TRUE.equals(result.getSpecSkipped()) ? "（未选中 spec）" : "")
                     : result.getReason();
-            jobs.finish(job.id(), success ? "SUCCEEDED" : "FAILED", message, Instant.now().toString());
+            jobs.finish(job.id(), success ? "SUCCEEDED" : "FAILED", message, Instant.now().toString(), result.getFailureStage());
         } catch (RuntimeException failure) {
             // 用户只看到固定说明；定位信息留在服务端，不输出请求、凭据或模型输入。
             log.error("工作台审查任务中断：jobId={}, repositoryId={}, number={}, error={}",
                     job.id(), job.repositoryId(), job.number(), failure.getClass().getSimpleName());
-            jobs.finish(job.id(), "FAILED", "审查执行中断，请核对仓库配置和服务端日志", Instant.now().toString());
+            jobs.finish(job.id(), "FAILED", "审查执行中断，请核对仓库配置和服务端日志", Instant.now().toString(), "EXECUTION");
         }
     }
 }

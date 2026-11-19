@@ -29,6 +29,7 @@ class StaleReviewWriteTest {
 
     @BeforeEach
     void setUp() {
+        doCallRealMethod().when(repo).publishLine(anyLong(), anyLong(), any(), any(), any(), any(), any());
         var properties = new GithubProperties();
         properties.setRepositoryId(REPO);
         var standards = mock(CodingStandardSource.class);

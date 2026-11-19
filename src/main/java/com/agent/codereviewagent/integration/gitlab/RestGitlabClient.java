@@ -5,6 +5,7 @@ import com.agent.codereviewagent.service.DiffNotReadyException;
 import com.agent.codereviewagent.service.DiffVersionChangedException;
 import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.GitlabClient;
+import com.agent.codereviewagent.service.VersionCheckFailedException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -141,11 +142,12 @@ public class RestGitlabClient implements GitlabClient {
     public long createLineDiscussion(long projectId, long mergeRequestIid, String path,
                                      Integer newLine, Integer oldLine, DiffRefs refs, String body) {
         String mergeRequest = mergeRequest(projectId, mergeRequestIid);
-        refs.requireCurrent(diffRefs(projectId, mergeRequestIid));
+        VersionCheckFailedException.verify(this, projectId, mergeRequestIid, refs);
         String oldPath = path;
         String newPath = path;
         // 重命名时新旧路径不同，行评论需要同一版 diff 中的两侧路径才能定位。
-        for (JsonNode diff : readDiffVersion(projectId, mergeRequestIid, refs, true)) {
+        for (JsonNode diff : VersionCheckFailedException.read(
+                () -> readDiffVersion(projectId, mergeRequestIid, refs, true))) {
             if (path.equals(diff.path("new_path").asText()) || path.equals(diff.path("old_path").asText())) {
                 oldPath = diff.path("old_path").asText();
                 newPath = diff.path("new_path").asText();
@@ -171,7 +173,7 @@ public class RestGitlabClient implements GitlabClient {
             if ((exception.status == 400 || exception.status == 422)
                     && (error.contains("position") || error.contains("line_code")
                         || error.contains("new_line") || error.contains("old_line"))) {
-                refs.requireCurrent(diffRefs(projectId, mergeRequestIid));
+                VersionCheckFailedException.verify(this, projectId, mergeRequestIid, refs);
                 return createOverviewDiscussion(projectId, mergeRequestIid, body);
             }
             throw exception;
@@ -396,6 +398,12 @@ public class RestGitlabClient implements GitlabClient {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    @Override
+    public boolean publicationRejected(RuntimeException failure) {
+        return failure instanceof GitlabRequestException rejected
+                && java.util.Set.of(400, 401, 403, 404, 422, 429).contains(rejected.status);
     }
 
     /** 响应正文只用于本适配器内判断位置拒绝，异常信息不暴露远端正文。 */

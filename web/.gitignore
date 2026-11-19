@@ -12,6 +12,8 @@ node_modules
 dist
 dist-ssr
 coverage
+test-artifacts
+__pycache__
 *.local
 
 /cypress/videos/

@@ -30,6 +30,17 @@ public interface RepositoryClient {
     /** 与行评论一样，返回适配器可还原的正数讨论标识，供后续定位讨论或删除评论。 */
     long createOverviewDiscussion(long projectId, long mergeRequestIid, String body);
 
+    record PublishedDiscussion(long id, String body) {}
+
+    /** 返回平台实际发布的正文，适配器若追加回退说明须覆盖此方法。 */
+    default PublishedDiscussion publishLine(long projectId, long number, String path, Integer newLine,
+                                            Integer oldLine, DiffRefs refs, String body) {
+        return new PublishedDiscussion(createLineDiscussion(projectId, number, path, newLine, oldLine, refs, body), body);
+    }
+
+    /** 只有平台明确拒绝请求才能确定没有发布；连接中断和未知响应不能按零计算。 */
+    default boolean publicationRejected(RuntimeException failure) { return false; }
+
     long createLineDiscussion(long projectId, long mergeRequestIid, String path, Integer newLine, Integer oldLine, String headSha, String body);
 
     default long createLineDiscussion(long projectId, long mergeRequestIid, String path, Integer newLine,

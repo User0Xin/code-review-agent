@@ -19,6 +19,8 @@ import com.agent.codereviewagent.service.RepositoryAccess;
 import com.agent.codereviewagent.service.ReviewPolicy;
 import com.agent.codereviewagent.service.ReviewDocuments;
 import com.agent.codereviewagent.service.ReviewRecordService;
+import com.agent.codereviewagent.service.ReviewFailureStage;
+import com.agent.codereviewagent.service.VersionCheckFailedException;
 import com.agent.codereviewagent.service.Reviewer;
 import com.agent.codereviewagent.service.SpecDocumentPicker;
 import com.agent.codereviewagent.utils.ReviewClock;
@@ -146,10 +148,22 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
 
     private ReviewRecordEntity runProfile(long profileId,long number,String trigger,String description,
                                           String head,RepositoryClient.DiffRefs expectedRefs) {
+        return runProfile(profileId, number, trigger, description, head, expectedRefs, null);
+    }
+
+    @Override
+    public synchronized ReviewRecordEntity runConfigured(long profileId, long number, String trigger, String description,
+                                                         RepositoryClient.DiffRefs expectedRefs, long jobId) {
+        return runProfile(profileId, number, trigger, description, expectedRefs.headSha(), expectedRefs, jobId);
+    }
+
+    private ReviewRecordEntity runProfile(long profileId,long number,String trigger,String description,
+                                          String head,RepositoryClient.DiffRefs expectedRefs, Long jobId) {
         var policy = profiles.policy(profileId);
         var profile = policy.profile();
         var context = new ReviewContext(access.client(profile),profile.remoteId(),profile.storageId(),number,trigger);
         context.expectedRefs = expectedRefs;
+        context.jobId = jobId;
         return policy.run(() -> {
             var result = runReview(context,description,head);
             if (profile.platform().equals("gitlab")) { revisions.checkAfterReview(profile.remoteId(),number); }
@@ -200,13 +214,13 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         context.phase = "评论写回失败";
         var drafts = stillOpen(findings.drafts(), priorFindings, resolved, declined).stream().distinct().toList();
         int failed = postDrafts(context, diffRefs, drafts);
+        if (failed > 0) { context.publicationFailureReason = "有 " + failed + " 条没能写回"; }
         context.phase = "讨论状态更新失败";
         resolveKnownDiscussions(context, diffRefs, priorFindings, resolved, declined);
         if (failed > 0) {
             return fail(context, "有 " + failed + " 条没能写回", null);
         }
         ReviewRecordEntity record = reviewRecord(context, null, clock.now());
-        record.setPublishedCount(drafts.size());
         // 清理通知失败不抹掉本次成功审查，旧索引保留到下一次重试。
         var old = reviewRecordService.findFailureNoteId(context.storageId, mergeRequestIid);
         if (old.isPresent()) {
@@ -226,42 +240,57 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private int postDrafts(ReviewContext context, RepositoryClient.DiffRefs refs, List<Reviewer.CommentDraft> drafts) {
         int failed = 0;
         for (Reviewer.CommentDraft draft : drafts) {
-            long discussionId;
+            RepositoryClient.PublishedDiscussion published;
             try {
-                discussionId = postOne(context, refs, draft);
+                published = postOne(context, refs, draft);
             }
             catch (DiffVersionChangedException changed) {
                 throw changed;
             }
+            catch (VersionCheckFailedException unavailable) {
+                context.phase = "提交状态核对失败";
+                throw unavailable;
+            }
             catch (RuntimeException exception) {
+                if (!context.client.publicationRejected(exception)) { context.publicationUncertain = true; }
                 failed++;
                 continue;
             }
             try {
-                findingService.recordPostedFinding(finding(
+                var finding = finding(
                         context.storageId,
                         context.mergeRequestIid,
-                        discussionId,
+                        published.id(),
                         draft.path(),
                         draft.newLine(),
                         draft.oldLine(),
                         draft.category(),
                         draft.citation(),
                         draft.commentBody(),
-                        refs.headSha()));
+                        refs.headSha());
+                finding.setWorkbenchJobId(context.jobId);
+                finding.setPublishedBody(published.body());
+                findingService.recordPostedFinding(finding);
+                context.publishedCount++;
             }
             catch (RuntimeException exception) {
                 // 平台写回与本地入库不能共用事务；入库失败时尝试删除刚发布的评论。
-                context.client.deleteNote(context.projectId, context.mergeRequestIid, discussionId);
+                try {
+                    context.client.deleteNote(context.projectId, context.mergeRequestIid, published.id());
+                } catch (RuntimeException cleanup) {
+                    context.publicationUncertain = true;
+                    throw cleanup;
+                }
                 failed++;
             }
         }
         return failed;
     }
 
-    private long postOne(ReviewContext context, RepositoryClient.DiffRefs refs, Reviewer.CommentDraft draft) {
+    private RepositoryClient.PublishedDiscussion postOne(ReviewContext context, RepositoryClient.DiffRefs refs, Reviewer.CommentDraft draft) {
+        VersionCheckFailedException.verify(context.client, context.projectId, context.mergeRequestIid, refs);
         if (draft.newLine() != null || draft.oldLine() != null) {
-            return context.client.createLineDiscussion(
+            return context.client.publishLine(
                     context.projectId,
                     context.mergeRequestIid,
                     draft.path(),
@@ -270,8 +299,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                     refs,
                     draft.commentBody());
         }
-        refs.requireCurrent(context.client.diffRefs(context.projectId, context.mergeRequestIid));
-        return context.client.createOverviewDiscussion(context.projectId, context.mergeRequestIid, draft.commentBody());
+        return new RepositoryClient.PublishedDiscussion(
+                context.client.createOverviewDiscussion(context.projectId, context.mergeRequestIid, draft.commentBody()), draft.commentBody());
     }
 
     /** 本地记录标识本服务发过的评论；向对应平台读取讨论的最新回复和解决状态。 */
@@ -397,6 +426,8 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
 
     /** 通知维护失败仍保存主审查结果，并保留可供下次清理的索引。 */
     private ReviewRecordEntity fail(ReviewContext context, String reason, RuntimeException failure) {
+        // 已发生的发布失败优先保留，后续更新讨论失败不能抹掉该失败点。
+        if (context.publicationFailureReason != null) { reason = context.publicationFailureReason; }
         ReviewRecordEntity record = reviewRecord(context, reason, clock.now());
         if (failure != null) {
             // 保存错误类型与代码位置，不保存可能携带提示词、模型原文或凭据的异常消息。
@@ -434,6 +465,9 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
     private static ReviewRecordEntity reviewRecord(ReviewContext context, String reason, Instant occurredAt) {
         ReviewRecordEntity record = new ReviewRecordEntity();
         record.setProjectId(context.storageId);
+        record.setWorkbenchJobId(context.jobId);
+        record.setPublishedCount(context.publicationUncertain ? null : context.publishedCount);
+        record.setFailureStage(reason == null ? null : ReviewFailureStage.fromReason(reason));
         record.setMergeRequestIid(context.mergeRequestIid);
         record.setTrigger(context.trigger);
         record.setHeadSha(context.headSha);
@@ -458,6 +492,10 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
         private final long mergeRequestIid;
         private final String trigger;
         private String headSha;
+        private Long jobId;
+        private int publishedCount;
+        private boolean publicationUncertain;
+        private String publicationFailureReason;
         private String phase = "审查执行失败";
         private RepositoryClient.DiffRefs expectedRefs;
         private Reviewer.Spec spec;
