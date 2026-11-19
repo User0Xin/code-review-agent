@@ -137,6 +137,7 @@ final class GithubApi {
             this.details = details;
         }
         boolean notFound() { return status == 404; }
+        boolean rejectedPublication() { return java.util.Set.of(400, 401, 403, 404, 422, 429).contains(status); }
         boolean rejectedLine() {
             if (status != 422) { return false; }
             String error = details.toLowerCase(java.util.Locale.ROOT);

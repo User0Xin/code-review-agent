@@ -5,6 +5,7 @@ import com.agent.codereviewagent.service.DiffNotReadyException;
 import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.DiffVersionChangedException;
 import com.agent.codereviewagent.service.RepositoryClient;
+import com.agent.codereviewagent.service.VersionCheckFailedException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -127,18 +128,32 @@ public class GithubClient implements RepositoryClient {
     @Override
     public long createLineDiscussion(long id, long number, String path, Integer newLine, Integer oldLine,
                                      DiffRefs expected, String body) {
-        expected.requireCurrent(diffRefs(id, number));
-        if (newLine == null && oldLine == null) { return createOverviewDiscussion(id, number, body); }
+        return publishLine(id, number, path, newLine, oldLine, expected, body).id();
+    }
+
+    @Override
+    public boolean publicationRejected(RuntimeException failure) {
+        return failure instanceof GithubApi.RequestFailure rejected && rejected.rejectedPublication();
+    }
+
+    @Override
+    public PublishedDiscussion publishLine(long id, long number, String path, Integer newLine, Integer oldLine,
+                                            DiffRefs expected, String body) {
+        VersionCheckFailedException.verify(this, id, number, expected);
+        if (newLine == null && oldLine == null) { return new PublishedDiscussion(createOverviewDiscussion(id, number, body), body); }
         int line = newLine == null ? oldLine : newLine;
         String side = newLine == null ? "LEFT" : "RIGHT";
         ObjectNode payload = api.object().put("body", body).put("commit_id", expected.headSha()).put("path", path)
                 .put("line", line).put("side", side);
         try {
-            return key(api.send("POST", pull(id, number) + "/comments", payload), false);
+            return new PublishedDiscussion(key(api.send("POST", pull(id, number) + "/comments", payload), false), body);
         } catch (GithubApi.RequestFailure error) {
             if (!error.rejectedLine()) { throw error; }
-            JsonNode current = api.get(pull(id, number));
-            expected.requireCurrent(refs(current));
+            JsonNode current = VersionCheckFailedException.read(() -> {
+                JsonNode latest = api.get(pull(id, number));
+                expected.requireCurrent(refs(latest));
+                return latest;
+            });
             // 被拒的行不一定有可用锚点；锁定两端 SHA 的比较页也适用于删除行和改名文件。
             String repositoryUrl = required(current.path("base").path("repo"), "html_url");
             String comparison = repositoryUrl + "/compare/" + GithubApi.segment(expected.baseSha()) + "..."
@@ -146,7 +161,7 @@ public class GithubClient implements RepositoryClient {
             String safePath = path.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
             String location = "\n\n原行评位置：<code>" + safePath + "</code>，" + side + " 第 " + line
                     + " 行 · [查看此次差异（" + expected.headSha() + "）](" + comparison + ")";
-            return createOverviewDiscussion(id, number, body + location);
+            return new PublishedDiscussion(createOverviewDiscussion(id, number, body + location), body + location);
         }
     }
 

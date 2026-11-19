@@ -40,6 +40,12 @@ class CrossPlatformReviewTest {
     @Autowired private ReviewRecordService records;
     @Autowired private FindingService findings;
 
+    @org.junit.jupiter.api.BeforeEach
+    void publishingReceipts() {
+        org.mockito.Mockito.doCallRealMethod().when(github).publishLine(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(), any(), any());
+        org.mockito.Mockito.doCallRealMethod().when(gitlab).publishLine(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(), any(), any());
+    }
+
     @Test
     void reviewsAndWritesToTheRightPlatformEvenWhenBothUseTheSameRepositoryAndRequestNumbers() {
         var gitlabRefs = prepareRepository(gitlab, "gitlab");

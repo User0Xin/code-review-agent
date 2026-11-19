@@ -12,4 +12,7 @@ public interface MergeRequestReviewService {
     /** 已取得平台身份的工作台审查；直接返回这一轮真实入库的记录。 */
     com.agent.codereviewagent.models.entity.ReviewRecordEntity runConfigured(long profileId, long number, String trigger,
             String description, RepositoryClient.DiffRefs expectedRefs);
+
+    com.agent.codereviewagent.models.entity.ReviewRecordEntity runConfigured(long profileId, long number, String trigger,
+            String description, RepositoryClient.DiffRefs expectedRefs, long jobId);
 }

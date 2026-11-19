@@ -52,9 +52,10 @@ def running(args, env, base, log):
                 time.sleep(.25)
             else:
                 raise AssertionError("jar startup failed: " + log.read_text(encoding="utf-8", errors="replace")[-4000:])
-            yield
+            yield process
         finally:
-            process.terminate()
+            if process.poll() is None:
+                process.terminate()
             try:
                 process.wait(15)
             except subprocess.TimeoutExpired:

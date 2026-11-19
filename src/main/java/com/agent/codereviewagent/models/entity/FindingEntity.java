@@ -12,6 +12,9 @@ public class FindingEntity {
 
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long workbenchJobId;
+    /** 平台实际发布的正文；原草稿正文继续用于历史去重。 */
+    private String publishedBody;
 
     private Long projectId;
 
