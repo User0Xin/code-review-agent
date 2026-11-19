@@ -5,6 +5,7 @@ import com.agent.codereviewagent.models.entity.CodingStandardRevisionEntity;
 import com.agent.codereviewagent.models.entity.FindingEntity;
 import com.agent.codereviewagent.service.CodingStandardRevisionService;
 import com.agent.codereviewagent.service.CodingStandardSource;
+import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.FalsePositiveJudge;
 import com.agent.codereviewagent.service.FindingService;
 import com.agent.codereviewagent.service.GitlabClient;
@@ -155,7 +156,13 @@ public class CodingStandardRevisionServiceImpl implements CodingStandardRevision
     private List<FindingEntity> judge(List<FindingEntity> candidates) {
         List<FindingEntity> eligible = new ArrayList<>();
         for (FindingEntity finding : candidates) {
-            var replies = gitlab.listReplies(finding.getProjectId(), finding.getMergeRequestIid(), finding.getDiscussionId());
+            List<String> replies;
+            try {
+                replies = gitlab.listReplies(finding.getProjectId(), finding.getMergeRequestIid(), finding.getDiscussionId());
+            } catch (DiscussionMissingException deleted) {
+                // 保留本地审计记录；缺失远端讨论的发现不能用作修改规范的依据。
+                continue;
+            }
             var decision = judge.judge(finding, replies);
             if (decision == null || decision.falsePositive() == null || decision.reason() == null || decision.reason().isBlank()) {
                 throw new IllegalStateException("误报判定缺少结论或理由");

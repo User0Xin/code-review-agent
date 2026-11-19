@@ -452,13 +452,29 @@ class MergeRequestWebhookTest {
         REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
                 new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
         postWebhook(openPayload());
+        long original = findings.findByMergeRequest(9, 3).get(0).getDiscussionId();
         REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
-                new Reviewer.CommentDraft("main.go", 20, null, "缺陷", null, "错误没有检查。")));
+                new Reviewer.CommentDraft("main.go", 20, null, "缺陷", null, "错误没有检查。", original)));
 
         postWebhook(updatePayload("oldsha"));
 
         assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::body).containsExactly("错误没有检查。");
         assertThat(findings.findByMergeRequest(9, 3)).hasSize(1);
+    }
+
+    @Test
+    void identicalWordingAtAnotherLineCanReportAnIndependentProblem() throws Exception {
+        GITLAB.readyWith("abc123");
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。")));
+        postWebhook(openPayload());
+        REVIEWER.findings = Reviewer.ReviewFindings.of(List.of(
+                new Reviewer.CommentDraft("main.go", 4, null, "缺陷", null, "错误没有检查。"),
+                new Reviewer.CommentDraft("main.go", 20, null, "缺陷", null, "错误没有检查。")));
+
+        postWebhook(updatePayload("oldsha"));
+
+        assertThat(GITLAB.notes).extracting(FakeGitlabImpl.Note::newLine).containsExactly(4, 20);
     }
 
     @Test

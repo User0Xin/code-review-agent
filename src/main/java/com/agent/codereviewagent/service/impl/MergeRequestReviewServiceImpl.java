@@ -299,7 +299,7 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
 
     /**
      * 原讨论仍未解决，或作者已表明无需修改时，不重复发评论。
-     * 匹配依据是路径、类别及相同的正文或讨论编号；行号不参与，因此不同位置的相同评论也可能被过滤。
+     * 行号移动时采用模型引用的讨论编号；无引用时要求位置和正文都一致。
      */
     private static List<Reviewer.CommentDraft> stillOpen(List<Reviewer.CommentDraft> drafts,
                                                          List<Reviewer.PriorFinding> priorFindings,
@@ -323,8 +323,11 @@ public class MergeRequestReviewServiceImpl implements MergeRequestReviewService 
                     || !java.util.Objects.equals(draft.category(), prior.category())) {
                 continue;
             }
-            boolean sameProblem = java.util.Objects.equals(draft.commentBody(), prior.commentBody())
-                    || java.util.Objects.equals(draft.priorDiscussionId(), prior.discussionId());
+            boolean sameProblem = draft.priorDiscussionId() != null
+                    ? draft.priorDiscussionId() == prior.discussionId()
+                    : java.util.Objects.equals(draft.newLine(), prior.newLine())
+                        && java.util.Objects.equals(draft.oldLine(), prior.oldLine())
+                        && java.util.Objects.equals(draft.commentBody(), prior.commentBody());
             if (sameProblem && (declined.contains(prior.discussionId())
                     || (!prior.resolved() && !resolved.contains(prior.discussionId())))) {
                 return true;

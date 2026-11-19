@@ -137,7 +137,10 @@ def run_browser(options, fixture, fixture_port, ui, api, token):
             check_layout(page, 1440, 900, "reviews-desktop", options.artifacts)
             page.goto(ui + "/repositories", wait_until="networkidle")
             el("repo-select").select_option(str(ids[BETA.name]))
-            skill_path = f"/api/repositories/{ids[BETA.name]}/skills/review"
+            # The write response contains the updated repository even when a separate detail read would fail.
+            repo_path = f"/api/repositories/{ids[BETA.name]}"
+            page.route("**" + repo_path, lambda route: route.fulfill(status=503))
+            skill_path = repo_path + "/skills/review"
             mutation(page, "PUT", skill_path, el("skill-toggle-review").click)
             expect(el("skill-toggle-review")).not_to_be_checked()
             el("skill-restore-review").click()

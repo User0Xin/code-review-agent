@@ -55,6 +55,9 @@ class GitlabTransportWebhookTest {
     private static volatile String currentBase = "base";
     private static volatile boolean firstDiscussionResolved;
     private static volatile boolean includeOwnAndSystemReplies;
+    private static volatile boolean discussionDeleted;
+    private static volatile boolean failureNoteDeleted;
+    private static volatile boolean modelFailure;
     private static volatile Reviewer.ReviewRequest lastReview;
     private static volatile List<Reviewer.CommentDraft> drafts = List.of();
     private static volatile List<Long> resolved = List.of();
@@ -86,6 +89,9 @@ class GitlabTransportWebhookTest {
         currentBase = "base";
         firstDiscussionResolved = false;
         includeOwnAndSystemReplies = false;
+        discussionDeleted = false;
+        failureNoteDeleted = false;
+        modelFailure = false;
         lastReview = null;
         drafts = List.of();
         resolved = List.of();
@@ -96,6 +102,57 @@ class GitlabTransportWebhookTest {
 
     @AfterAll
     static void stop() { SERVER.stop(0); }
+
+    @Test
+    void deletedHistoricalDiscussionDoesNotBlockReviewAndItsAuditRecordSurvives() throws Exception {
+        drafts = List.of(new Reviewer.CommentDraft("renamed.go", 12, null, "缺陷", null, "错误没有处理。"));
+        webhook("open");
+        discussionDeleted = true;
+        lastReview = null;
+
+        webhook("update");
+
+        assertThat(lastReview).isNotNull();
+        assertThat(lastReview.priorFindings()).isEmpty();
+        assertThat(findings.findByMergeRequest(9, 3)).extracting(finding -> finding.getDiscussionId())
+                .containsExactly(101L, 102L);
+        assertThat(jdbc.queryForList("SELECT outcome FROM review_record ORDER BY id", String.class))
+                .containsExactly("SUCCESS", "SUCCESS");
+    }
+
+    @Test
+    void deletedFailureNotificationIsReplacedOnTheNextFailure() throws Exception {
+        modelFailure = true;
+        webhook("open");
+        assertThat(jdbc.queryForObject("SELECT note_id FROM review_failure_note", Long.class)).isEqualTo(101L);
+        failureNoteDeleted = true;
+
+        webhook("update");
+
+        assertThat(POSTED).hasSize(2);
+        assertThat(POSTED).allSatisfy(note -> assertThat(note.path("body").asText()).startsWith("审查失败："));
+        assertThat(jdbc.queryForObject("SELECT note_id FROM review_failure_note", Long.class)).isEqualTo(102L);
+        assertThat(jdbc.queryForList("SELECT outcome FROM review_record ORDER BY id", String.class))
+                .containsExactly("FAILED", "FAILED");
+        assertThat(RECEIVED).anyMatch(request -> request.method().equals("GET") && request.path().endsWith("/notes"));
+    }
+
+    @Test
+    void successfulReviewClearsTheIndexOfAnAlreadyDeletedFailureNotification() throws Exception {
+        modelFailure = true;
+        webhook("open");
+        failureNoteDeleted = true;
+        modelFailure = false;
+
+        webhook("update");
+
+        assertThat(POSTED).hasSize(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM review_failure_note", Integer.class)).isZero();
+        assertThat(jdbc.queryForList("SELECT outcome FROM review_record ORDER BY id", String.class))
+                .containsExactly("FAILED", "SUCCESS");
+        assertThat(jdbc.queryForObject("SELECT note_error FROM review_record ORDER BY id DESC LIMIT 1", String.class))
+                .isNull();
+    }
 
     @Test
     void webhookWritesChineseCommentsWithFullDiffPositionAndStoresNoteIds() throws Exception {
@@ -352,7 +409,8 @@ class GitlabTransportWebhookTest {
             }
         }
         else if (path.endsWith("/discussions") && method.equals("GET")) {
-            if (discussionOnSecondPage && exchange.getRequestURI().getQuery().endsWith("&page=1")) {
+            if (discussionDeleted) { response = "[]"; }
+            else if (discussionOnSecondPage && exchange.getRequestURI().getQuery().endsWith("&page=1")) {
                 if (missingPaginationHeader) {
                     var discussions = JSON.createArrayNode();
                     for (int index = 0; index < 100; index++) {
@@ -389,6 +447,9 @@ class GitlabTransportWebhookTest {
             firstDiscussionResolved = body.path("resolved").asBoolean();
             response = "{}";
         }
+        else if (path.endsWith("/notes") && method.equals("GET") && failureNoteDeleted) {
+            response = "[]";
+        }
         else { status = 404; response = "{}"; }
         byte[] output = response.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -403,6 +464,7 @@ class GitlabTransportWebhookTest {
     static class Fakes {
         @Bean @Primary Reviewer transportReviewer() {
             return request -> {
+                if (modelFailure) { throw new IllegalStateException("模拟模型失败"); }
                 lastReview = request;
                 if (changeBaseAfterModel) { currentBase = "changed-base"; }
                 return new Reviewer.ReviewFindings(drafts, resolved);

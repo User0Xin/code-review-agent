@@ -3,6 +3,7 @@ package com.agent.codereviewagent.integration.gitlab;
 import com.agent.codereviewagent.config.GitlabProperties;
 import com.agent.codereviewagent.service.DiffNotReadyException;
 import com.agent.codereviewagent.service.DiffVersionChangedException;
+import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,6 +19,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 
@@ -67,13 +69,11 @@ public class RestGitlabClient implements GitlabClient {
 
     private static Optional<DiffRefs> refs(JsonNode mr) {
         JsonNode refs = mr.path("diff_refs");
-        if (refs.path("head_sha").asText().isBlank()
-                || refs.path("base_sha").asText().isBlank()
-                || refs.path("start_sha").asText().isBlank()) {
-            return Optional.empty();
-        }
-        return Optional.of(new DiffRefs(refs.path("head_sha").asText(), refs.path("base_sha").asText(),
-                refs.path("start_sha").asText()));
+        String head = refs.path("head_sha").asText("");
+        String base = refs.path("base_sha").asText("");
+        String start = refs.path("start_sha").asText("");
+        if (head.isBlank() || base.isBlank() || start.isBlank()) { return Optional.empty(); }
+        return Optional.of(new DiffRefs(head, base, start));
     }
 
     /** 以不可变 diff version 固定本次提交，拒绝 GitLab 因大小限制裁掉的差异。 */
@@ -180,7 +180,31 @@ public class RestGitlabClient implements GitlabClient {
 
     @Override
     public void deleteNote(long projectId, long mergeRequestIid, long noteId) {
-        send("DELETE", mergeRequest(projectId, mergeRequestIid) + "/notes/" + noteId, null);
+        String mr = mergeRequest(projectId, mergeRequestIid);
+        try {
+            send("DELETE", mr + "/notes/" + noteId, null);
+        }
+        catch (GitlabRequestException failure) {
+            // 404 也可能隐藏权限不足；必须读完同一 MR 的评论并确认缺失，才能幂等清理本地索引。
+            if (failure.status != 404 || !noteMissing(mr, noteId)) { throw failure; }
+        }
+    }
+
+    private boolean noteMissing(String mr, long noteId) {
+        var seen = new HashSet<Long>();
+        for (JsonNode note : list(mr + "/notes")) {
+            long id = checkedNoteId(note);
+            if (!seen.add(id)) { throw new IllegalStateException("GitLab 评论清单包含重复编号"); }
+        }
+        return !seen.contains(noteId);
+    }
+
+    private static long checkedNoteId(JsonNode note) {
+        JsonNode id = note.path("id");
+        if (!id.isIntegralNumber() || !id.canConvertToLong() || id.asLong() <= 0) {
+            throw new IllegalStateException("GitLab 评论缺少有效编号");
+        }
+        return id.asLong();
     }
 
     @Override
@@ -224,8 +248,16 @@ public class RestGitlabClient implements GitlabClient {
     public void resolveDiscussion(long projectId, long mergeRequestIid, long discussionId, DiffRefs expected) {
         JsonNode discussion = discussion(projectId, mergeRequestIid, discussionId);
         if (expected != null) { expected.requireCurrent(diffRefs(projectId, mergeRequestIid)); }
-        send("PUT", mergeRequest(projectId, mergeRequestIid) + "/discussions/"
-                + encode(discussion.path("id").asText()), json.createObjectNode().put("resolved", true));
+        try {
+            send("PUT", mergeRequest(projectId, mergeRequestIid) + "/discussions/"
+                    + encode(discussion.path("id").asText()), json.createObjectNode().put("resolved", true));
+        } catch (GitlabRequestException failure) {
+            if (failure.status == 404) {
+                // 定位成功后讨论仍可能被删除；重新读完清单才能把 404 当作已删除。
+                discussion(projectId, mergeRequestIid, discussionId);
+            }
+            throw failure;
+        }
     }
 
     @Override
@@ -258,12 +290,22 @@ public class RestGitlabClient implements GitlabClient {
     }
 
     private JsonNode discussion(long projectId, long mergeRequestIid, long noteId) {
+        JsonNode found = null;
+        var seen = new HashSet<Long>();
         for (JsonNode discussion : list(mergeRequest(projectId, mergeRequestIid) + "/discussions")) {
-            for (JsonNode note : discussion.path("notes")) {
-                if (note.path("id").asLong() == noteId) { return discussion; }
+            JsonNode notes = discussion.path("notes");
+            if (!discussion.path("id").isTextual() || discussion.path("id").asText().isBlank()
+                    || !notes.isArray() || notes.isEmpty()) {
+                throw new IllegalStateException("GitLab 讨论清单格式不正确");
+            }
+            for (JsonNode note : notes) {
+                long id = checkedNoteId(note);
+                if (!seen.add(id)) { throw new IllegalStateException("GitLab 讨论清单包含重复评论编号"); }
+                if (id == noteId) { found = discussion; }
             }
         }
-        throw new IllegalStateException("找不到发现对应的 GitLab 讨论");
+        if (found != null) { return found; }
+        throw new DiscussionMissingException();
     }
 
     private long createdNoteId(JsonNode discussion) {
@@ -300,7 +342,7 @@ public class RestGitlabClient implements GitlabClient {
                 if (next.isBlank()) { break; }
                 try {
                     int nextPage = Integer.parseInt(next);
-                    if (nextPage <= page) { throw new NumberFormatException(); }
+                    if (nextPage != page + 1) { throw new NumberFormatException(); }
                     page = nextPage;
                 }
                 catch (NumberFormatException exception) {

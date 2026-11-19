@@ -2,6 +2,7 @@ package com.agent.codereviewagent.controller;
 
 import com.agent.codereviewagent.models.entity.FindingEntity;
 import com.agent.codereviewagent.service.CodingStandardPicker;
+import com.agent.codereviewagent.service.DiscussionMissingException;
 import com.agent.codereviewagent.service.FalsePositiveJudge;
 import com.agent.codereviewagent.service.GitlabClient;
 import com.agent.codereviewagent.service.Reviewer;
@@ -75,6 +76,19 @@ class RevisionLifecycleWebhookTest {
         JUDGE.calls.clear();
         SUMMARY.reset();
         REVISIONS.reset();
+    }
+
+    @Test
+    void deletedDiscussionDoesNotBlockARevisionBasedOnOtherFindings() throws Exception {
+        publish("已删除的讨论");
+        GITLAB.deleted.add(noteId("已删除的讨论"));
+        publish("第一条有效发现");
+        publish("第二条有效发现");
+
+        assertThat(SUMMARY.batches).singleElement().satisfies(batch ->
+                assertThat(batch).extracting(FindingEntity::getCommentBody)
+                        .containsExactly("第一条有效发现", "第二条有效发现"));
+        assertThat(revisionId("已删除的讨论")).isNull();
     }
 
     @Test
@@ -421,8 +435,9 @@ class RevisionLifecycleWebhookTest {
         long nextNote;
         final List<String> postedBodies = new ArrayList<>();
         final Map<Long, List<String>> replies = new HashMap<>();
+        final Set<Long> deleted = new HashSet<>();
         final Set<Long> resolved = new HashSet<>();
-        void reset() { nextNote = 0; postedBodies.clear(); replies.clear(); resolved.clear(); }
+        void reset() { nextNote = 0; postedBodies.clear(); replies.clear(); resolved.clear(); deleted.clear(); }
         @Override public Optional<DiffRefs> diffRefs(long projectId, long mergeRequestIid) {
             return Optional.of(new DiffRefs("head-sha"));
         }
@@ -436,6 +451,7 @@ class RevisionLifecycleWebhookTest {
         }
         @Override public void deleteNote(long projectId, long mergeRequestIid, long noteId) { }
         @Override public List<String> listReplies(long projectId, long mergeRequestIid, long discussionId) {
+            if (deleted.contains(discussionId)) { throw new DiscussionMissingException(); }
             return replies.getOrDefault(discussionId, List.of());
         }
         @Override public boolean isDiscussionResolved(long projectId, long mergeRequestIid, long discussionId) {
