@@ -3,7 +3,7 @@ import { onBeforeUnmount, ref } from 'vue'
 import type { Repository, SkillSlot } from '@/business/repository'
 import { readSkill } from '@/business/repository'
 import { SKILLS } from '@/constants/workbench'
-import { getRepository, restoreSkill, updateSkill } from '@/requests/repositories'
+import { restoreSkill, updateSkill } from '@/requests/repositories'
 import { messageOf } from '@/utils/request'
 const props = defineProps<{ repository: Repository }>()
 const emit = defineEmits<{ changed: [Repository] }>()
@@ -18,14 +18,13 @@ onBeforeUnmount(() => {
 function state(slot: SkillSlot) {
   return props.repository.skills.find((item) => item.slot === slot)
 }
-async function action(slot: SkillSlot, operation: () => Promise<unknown>, success: string) {
+async function action(slot: SkillSlot, operation: () => Promise<Repository>, success: string) {
   if (busy.value) return
   busy.value = slot
   notice.value = ''
   error.value = ''
   try {
-    await operation()
-    const fresh = await getRepository(props.repository.id)
+    const fresh = await operation()
     if (active) {
       emit('changed', fresh)
       notice.value = success

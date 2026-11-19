@@ -1,5 +1,7 @@
 package com.agent.codereviewagent.service;
 
+import com.agent.codereviewagent.config.DiffWaitProperties;
+import com.agent.codereviewagent.utils.Sleeper;
 import com.agent.codereviewagent.mapper.WorkbenchJobMapper;
 import com.agent.codereviewagent.models.entity.ReviewRecordEntity;
 import com.agent.codereviewagent.models.entity.WorkbenchJob;
@@ -16,12 +18,18 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
 
 /** 手动和 webhook 共享任务身份。只在登记时短暂串行，平台请求和模型调用不持有登记锁。 */
 @Service
 @DependsOnDatabaseInitialization
 public class WorkbenchJobs implements InitializingBean {
     private static final Logger log = LoggerFactory.getLogger(WorkbenchJobs.class);
+    // 临时版本只用于尚在等待平台 diff 的事件，不能与任何真实提交 SHA 相同。
+    private static final String AWAITING_DIFF = "#awaiting-diff";
+    private final DiffWaitProperties diffWait;
+    private final Sleeper sleeper;
     private final WorkbenchJobMapper jobs;
     private final RepositoryProfiles repositories;
     private final RepositoryAccess access;
@@ -29,12 +37,15 @@ public class WorkbenchJobs implements InitializingBean {
     private final TaskExecutor worker;
 
     public WorkbenchJobs(WorkbenchJobMapper jobs, RepositoryProfiles repositories, RepositoryAccess access,
-                         MergeRequestReviewService review, @Qualifier("githubWebhookExecutor") TaskExecutor worker) {
+                         MergeRequestReviewService review, @Qualifier("githubWebhookExecutor") TaskExecutor worker,
+                         DiffWaitProperties diffWait, Sleeper sleeper) {
         this.jobs = jobs;
         this.repositories = repositories;
         this.access = access;
         this.review = review;
         this.worker = worker;
+        this.diffWait = diffWait;
+        this.sleeper = sleeper;
     }
 
     @Override
@@ -53,6 +64,7 @@ public class WorkbenchJobs implements InitializingBean {
     }
 
     public WorkbenchJob webhook(RepositoryProfile profile, long number, String expectedHead) {
+        if (expectedHead != null && expectedHead.isBlank()) { return null; }
         return start(profile, number, "webhook", expectedHead);
     }
 
@@ -60,42 +72,82 @@ public class WorkbenchJobs implements InitializingBean {
         if (number <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入正整数 PR/MR 编号");
         }
+        RepositoryClient client;
         RepositoryClient.Change change;
         try {
-            // 客户端绑定已登记仓库，在该仓库下解析编号；不接受浏览器传入的 API 地址或提交。
-            change = access.client(profile).change(profile.remoteId(), number);
-        } catch (DiffNotReadyException notReady) {
-            // 平台确认编号存在，只是还没生成可审查的 diff；与读取失败分开报告。
-            throw new ResponseStatusException(HttpStatus.CONFLICT, notReady.getMessage());
+            client = access.client(profile);
+            change = readChange(client, profile, number);
         } catch (RuntimeException failure) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "无法读取此仓库的 PR/MR，请核对编号和服务端访问权限");
         }
-        if (change == null || change.refs() == null || change.refs().headSha() == null
-                || change.refs().headSha().isBlank()) {
+        if (expectedHead != null && !matches(change, expectedHead)) {
+            var pending = new RepositoryClient.DiffRefs(expectedHead, "", AWAITING_DIFF);
+            return enqueue(profile.id(), number, source, pending, job -> awaitVersion(job, profile, client));
+        }
+        if (change == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "合并请求的 diff 尚未就绪");
         }
-        if (expectedHead != null && !expectedHead.equals(change.refs().headSha())) {
-            // 延迟交付的旧 webhook 不应替另一个提交发起评审。
-            return null;
-        }
-        return enqueue(profile.id(), number, source, change);
+        return enqueue(profile.id(), number, source, change.refs(), job -> execute(job, change));
     }
 
-    private synchronized WorkbenchJob enqueue(long repo, long number, String source, RepositoryClient.Change change) {
-        var refs = change.refs();
-        String base = refs.baseSha() == null ? "" : refs.baseSha();
-        String start = refs.startSha() == null ? "" : refs.startSha();
-        WorkbenchJob previous = jobs.latest(repo, number, refs.headSha(), base, start);
-        Instant now = Instant.now();
-        if (previous != null && (previous.finishedAt() == null
-                || ("webhook".equals(source) && "SUCCEEDED".equals(previous.status()))
-                || Instant.parse(previous.finishedAt()).plusSeconds(3).isAfter(now))) {
-            return previous;
+    private static RepositoryClient.Change readChange(RepositoryClient client, RepositoryProfile profile, long number) {
+        try {
+            var change = client.change(profile.remoteId(), number);
+            return change == null || change.refs() == null || change.refs().headSha() == null
+                    || change.refs().headSha().isBlank() ? null : change;
+        } catch (DiffNotReadyException notReady) {
+            return null;
         }
-        jobs.enqueue(repo, number, refs.headSha(), base, start, source, now.toString());
+    }
+
+    private static boolean matches(RepositoryClient.Change change, String head) {
+        return change != null && head.equals(change.refs().headSha());
+    }
+
+    private void awaitVersion(WorkbenchJob job, RepositoryProfile profile, RepositoryClient client) {
+        try {
+            for (int attempt = 0; attempt < Math.max(1, diffWait.getMaxAttempts()); attempt++) {
+                if (attempt > 0) { sleeper.sleep(diffWait.getInterval()); }
+                var change = readChange(client, profile, job.number());
+                if (matches(change, job.headSha())) {
+                    if (bindVersion(job, change.refs())) { execute(job, change); }
+                    return;
+                }
+            }
+            jobs.finish(job.id(), "FAILED", "等待事件指定版本的 diff 超时，请核对提交后重新发起评审", Instant.now().toString());
+        } catch (RuntimeException failure) {
+            jobs.finish(job.id(), "FAILED", "无法读取事件指定版本的 diff，请核对平台连接后重试", Instant.now().toString());
+        }
+    }
+
+    // 等待期间手动任务或另一交付可能已经认领完整版本。与入队共用登记锁。
+    private synchronized boolean bindVersion(WorkbenchJob pending, RepositoryClient.DiffRefs refs) {
+        String base = Objects.toString(refs.baseSha(), "");
+        String start = Objects.toString(refs.startSha(), "");
+        if (reusable(pending.repositoryId(), pending.number(), refs.headSha(), base, start, "webhook") != null) {
+            jobs.discardDuplicate(pending.id());
+            return false;
+        }
+        return jobs.bindVersion(pending.id(), base, start) == 1;
+    }
+
+    private WorkbenchJob reusable(long repo, long number, String head, String base, String start, String source) {
+        WorkbenchJob previous = jobs.latest(repo, number, head, base, start);
+        if (previous == null || previous.finishedAt() == null) { return previous; }
+        if ("webhook".equals(source)) { return jobs.successful(repo, number, head, base, start); }
+        return Instant.parse(previous.finishedAt()).plusSeconds(3).isAfter(Instant.now()) ? previous : null;
+    }
+
+    private synchronized WorkbenchJob enqueue(long repo, long number, String source, RepositoryClient.DiffRefs refs,
+                                             Consumer<WorkbenchJob> task) {
+        String base = Objects.toString(refs.baseSha(), "");
+        String start = Objects.toString(refs.startSha(), "");
+        WorkbenchJob previous = reusable(repo, number, refs.headSha(), base, start, source);
+        if (previous != null) { return previous; }
+        jobs.enqueue(repo, number, refs.headSha(), base, start, source, Instant.now().toString());
         var job = jobs.latest(repo, number, refs.headSha(), base, start);
         try {
-            worker.execute(() -> execute(job, change));
+            worker.execute(() -> task.accept(job));
         } catch (TaskRejectedException full) {
             jobs.finish(job.id(), "FAILED", "审查队列已满，请稍后重试", Instant.now().toString());
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "审查队列已满，请稍后重试");
